@@ -60,8 +60,10 @@ $y_i$ and $-y_i$, respectively.
 """
 import logging
 import numbers
+import os
 from concurrent.futures import FIRST_COMPLETED, Future, wait
 from copy import copy
+from pathlib import Path
 from typing import Callable, Optional, Set, Tuple, Union, cast
 
 import numpy as np
@@ -252,6 +254,7 @@ def compute_classwise_shapley_values(
     config: ParallelConfig = ParallelConfig(),
     progress: bool = False,
     seed: Optional[Seed] = None,
+    log_folder: Optional[Path] = None,
 ) -> ValuationResult:
     r"""
     Computes an approximate Class-wise Shapley value by sampling independent
@@ -291,6 +294,8 @@ def compute_classwise_shapley_values(
         config: Parallel configuration.
         progress: Whether to display a progress bar.
         seed: Either an instance of a numpy random number generator or a seed for it.
+        log_folder: If set history of each valuation result is stored in the
+            specified folder.
 
     Returns:
         ValuationResult object containing computed data values.
@@ -326,6 +331,7 @@ def compute_classwise_shapley_values(
     )
     terminate_exec = False
     seed_sequence = ensure_seed_sequence(seed)
+    history = [] if log_folder else None
 
     with init_executor(max_workers=n_jobs, config=config) as executor:
         pending: Set[Future] = set()
@@ -335,6 +341,11 @@ def compute_classwise_shapley_values(
             )
             for future in completed_futures:
                 accumulated_result += future.result()
+                if log_folder is not None:
+                    history.append(
+                        accumulated_result.values[accumulated_result.indices]
+                    )
+
                 if done(accumulated_result):
                     terminate_exec = True
                     break
@@ -362,6 +373,9 @@ def compute_classwise_shapley_values(
     result = accumulated_result
     if normalize_values:
         result = _normalize_classwise_shapley_values(result, u)
+
+    if log_folder:
+        np.savetxt(log_folder / "history.txt", np.array(history))
 
     return result
 

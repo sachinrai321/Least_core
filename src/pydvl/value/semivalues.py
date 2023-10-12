@@ -94,6 +94,7 @@ from enum import Enum
 from itertools import islice
 from typing import Iterable, List, Optional, Protocol, Tuple, Type, cast
 
+import numpy as np
 import scipy as sp
 from deprecate import deprecated
 from tqdm import tqdm
@@ -182,6 +183,7 @@ def compute_generic_semivalues(
     n_jobs: int = 1,
     config: ParallelConfig = ParallelConfig(),
     progress: bool = False,
+    log_folder: Optional[Path] = None,
 ) -> ValuationResult:
     """Computes semi-values for a given utility function and subset sampler.
 
@@ -204,6 +206,8 @@ def compute_generic_semivalues(
         config: Object configuring parallel computation, with cluster
             address, number of cpus, etc.
         progress: Whether to display a progress bar.
+        log_folder: If set history of each valuation result is stored in the
+            specified folder.
 
     Returns:
         Object with the results.
@@ -246,6 +250,7 @@ def compute_generic_semivalues(
 
     sampler_it = iter(sampler)
     pbar = tqdm(disable=not progress, total=100, unit="%")
+    history = [] if log_folder else None
 
     with init_executor(
         max_workers=max_workers, config=config, cancel_futures=True
@@ -259,7 +264,13 @@ def compute_generic_semivalues(
             for future in completed:
                 for idx, marginal in future.result():
                     result.update(idx, marginal)
+                    if log_folder is not None:
+                        history.append(result.values[result.indices])
+
                     if done(result):
+                        if log_folder:
+                            np.savetxt(log_folder / "history.txt", np.array(history))
+
                         return result
 
             # Ensure that we always have n_submitted_jobs running

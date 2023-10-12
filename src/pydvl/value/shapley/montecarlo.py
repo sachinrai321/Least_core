@@ -48,6 +48,7 @@ import operator
 from concurrent.futures import FIRST_COMPLETED, Future, wait
 from functools import reduce
 from itertools import cycle, takewhile
+from pathlib import Path
 from typing import Optional, Sequence, Union
 
 import numpy as np
@@ -142,6 +143,7 @@ def permutation_montecarlo_shapley(
     config: ParallelConfig = ParallelConfig(),
     progress: bool = False,
     seed: Seed = None,
+    log_folder: Optional[Path] = None,
 ) -> ValuationResult:
     r"""Computes an approximate Shapley value by sampling independent
     permutations of the index set, approximating the sum:
@@ -189,6 +191,8 @@ def permutation_montecarlo_shapley(
             number of cpus, etc.
         progress: Whether to display a progress bar.
         seed: Either an instance of a numpy random number generator or a seed for it.
+        log_folder: If set history of each valuation result is stored in the
+            specified folder.
 
     Returns:
         Object with the data values.
@@ -206,6 +210,7 @@ def permutation_montecarlo_shapley(
     )
 
     pbar = tqdm(disable=not progress, total=100, unit="%")
+    history = [] if log_folder else None
 
     with init_executor(
         max_workers=max_workers, config=config, cancel_futures=CancellationPolicy.ALL
@@ -222,7 +227,14 @@ def permutation_montecarlo_shapley(
                 result += future.result()
                 # we could check outside the loop, but that means more
                 # submissions if the stopping criterion is unstable
+
+                if log_folder is not None:
+                    history.append(result.values[result.indices])
+
                 if done(result):
+                    if log_folder:
+                        np.savetxt(log_folder / "history.txt", np.array(history))
+
                     return result
 
             # Ensure that we always have n_submitted_jobs in the queue or running
