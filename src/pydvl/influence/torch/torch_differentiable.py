@@ -483,7 +483,7 @@ def get_layer_kfac_hooks(
         with_bias = module.bias is not None
 
         def input_hook(m, x, y):
-            x = x[0]
+            x = x[0].reshape(-1, module.in_features)
             if with_bias:
                 x = torch.cat(
                     (x, torch.ones((x.shape[0], 1), device=module.weight.device)), dim=1
@@ -491,7 +491,7 @@ def get_layer_kfac_hooks(
             forward_x[m_name] += torch.mm(x.t(), x)
 
         def grad_hook(m, m_grad, m_out):
-            m_out = m_out[0]
+            m_out = m_out[0].reshape(-1, module.out_features)
             grad_y[m_name] += torch.mm(m_out.t(), m_out)
 
     else:
@@ -630,7 +630,7 @@ def get_layer_diag_hooks(
         with_bias = module.bias is not None
 
         def input_hook(m, x, y):
-            x = x[0]
+            x = x[0].reshape(-1, module.in_features)
             if with_bias:
                 x = torch.cat(
                     (x, torch.ones((x.shape[0], 1), device=module.weight.device)), dim=1
@@ -638,7 +638,7 @@ def get_layer_diag_hooks(
             last_x_kfe[m_name] = torch.mm(x, evecs_a[m_name])
 
         def grad_hook(m, m_grad, m_out):
-            m_out = m_out[0]
+            m_out = m_out[0].reshape(-1, module.out_features)
             gy_kfe = torch.mm(m_out, evecs_g[m_name])
             diags[m_name] += torch.mm(gy_kfe.t() ** 2, last_x_kfe[m_name] ** 2).view(-1)
 
