@@ -142,7 +142,8 @@ def _montecarlo_least_core(
         n_iterations: total number of iterations to use
         progress: If True, shows a tqdm progress bar
         job_id: Integer id used to determine the position of the progress bar
-        seed: Either an instance of a numpy random number generator or a seed for it.
+        seed: Either an instance of a numpy random number generator or a seed
+            for it.
 
     Returns:
         A solution

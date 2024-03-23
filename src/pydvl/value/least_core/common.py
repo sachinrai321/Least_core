@@ -98,7 +98,7 @@ def lc_solve_problem(
         b_lb = b_lb[mask]
         A_lb = A_lb[mask]
 
-    _, subsidy = _solve_least_core_linear_program(
+    payoff, subsidy = _solve_least_core_linear_program(
         A_eq=A_eq,
         b_eq=b_eq,
         A_lb=A_lb,
@@ -116,8 +116,11 @@ def lc_solve_problem(
         values[:] = np.nan
         subsidy = np.nan
     else:
+        solver_options["warm_start"] = True
+
         values = _solve_egalitarian_least_core_quadratic_program(
             subsidy,
+            payoff,
             A_eq=A_eq,
             b_eq=b_eq,
             A_lb=A_lb,
@@ -205,7 +208,7 @@ def _solve_least_core_linear_program(
     b_lb: NDArray[np.float_],
     solver_options: dict,
     non_negative_subsidy: bool = False,
-) -> Tuple[Optional[NDArray[np.float_]], Optional[float]]:
+) -> Tuple[Optional[cp.Variable], Optional[float]]:
     r"""Solves the Least Core's linear program using cvxopt.
 
     $$
@@ -265,7 +268,7 @@ def _solve_least_core_linear_program(
                 RuntimeWarning,
             )
         subsidy = e.value.item()
-        return x.value, subsidy
+        return x, subsidy
 
     if problem.status in cp.settings.INF_OR_UNB:
         warnings.warn(
@@ -277,6 +280,7 @@ def _solve_least_core_linear_program(
 
 def _solve_egalitarian_least_core_quadratic_program(
     subsidy: float,
+    x: cp.Variable,
     A_eq: NDArray[np.float_],
     b_eq: NDArray[np.float_],
     A_lb: NDArray[np.float_],
@@ -293,13 +297,15 @@ def _solve_egalitarian_least_core_quadratic_program(
         & x in \mathcal{R}^n , \\
         & e \text{ is a constant.}
     $$
-     where $x$ is a vector of decision variables; ,
+     where $x$ is a vector of decision variables;
     $b_{ub}$, $b_{eq}$, $l$, and $u$ are vectors; and
     $A_{ub}$ and $A_{eq}$ are matrices.
 
     Args:
         subsidy: Minimal subsidy returned by
             [_solve_least_core_linear_program()][pydvl.value.least_core.common._solve_least_core_linear_program]
+        x: Payoff returned by the linear problem. Used as the initial guess for
+            the quadratic problem.
         A_eq: The equality constraint matrix. Each row of `A_eq` specifies the
             coefficients of a linear equality constraint on `x`.
         b_eq: The equality constraint vector. Each element of `A_eq @ x` must equal
@@ -314,10 +320,6 @@ def _solve_egalitarian_least_core_quadratic_program(
             for all possible options.
     """
     logger.debug(f"Solving quadratic program : {A_eq=}, {b_eq=}, {A_lb=}, {b_lb=}")
-
-    n_variables = A_eq.shape[1]
-
-    x = cp.Variable(n_variables)
 
     objective = cp.Minimize(cp.norm2(x))
     constraints = [A_eq @ x == b_eq, (A_lb @ x + subsidy * np.ones(len(A_lb))) >= b_lb]
