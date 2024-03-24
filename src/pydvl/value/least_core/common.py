@@ -1,7 +1,7 @@
 import itertools
 import logging
 import warnings
-from typing import List, NamedTuple, Optional, Sequence, Tuple
+from typing import List, NamedTuple, Optional, Sequence, Tuple, Union
 
 import cvxpy as cp
 import numpy as np
@@ -109,7 +109,7 @@ def lc_solve_problem(
 
     values: Optional[NDArray[np.float_]]
 
-    if subsidy is None:
+    if subsidy is None or payoff is None:
         logger.debug("No values were found")
         status = Status.Failed
         values = np.empty(n)
@@ -208,7 +208,7 @@ def _solve_least_core_linear_program(
     b_lb: NDArray[np.float_],
     solver_options: dict,
     non_negative_subsidy: bool = False,
-) -> Tuple[Optional[cp.Variable], Optional[float]]:
+) -> Union[Tuple[cp.Variable, float], Tuple[None, None]]:
     r"""Solves the Least Core's linear program using cvxopt.
 
     $$
