@@ -215,11 +215,11 @@ class ValuationResult(
     def __init__(
         self,
         *,
-        values: NDArray[np.float_],
-        variances: Optional[NDArray[np.float_]] = None,
-        counts: Optional[NDArray[np.int_]] = None,
-        indices: Optional[NDArray[IndexT]] = None,
-        data_names: Optional[Sequence[NameT] | NDArray[NameT]] = None,
+        values: Sequence[np.float_] | NDArray[np.float_],
+        variances: Sequence[np.float_] | NDArray[np.float_] | None = None,
+        counts: Sequence[np.int_] | NDArray[np.int_] | None = None,
+        indices: Sequence[IndexT] | NDArray[IndexT] | None = None,
+        data_names: Sequence[NameT] | NDArray[NameT] | None = None,
         algorithm: str = "",
         status: Status = Status.Pending,
         sort: bool = False,
@@ -234,9 +234,15 @@ class ValuationResult(
 
         self._algorithm = algorithm
         self._status = Status(status)  # Just in case we are given a string
-        self._values = values
-        self._variances = np.zeros_like(values) if variances is None else variances
-        self._counts = np.ones_like(values) if counts is None else counts
+        self._values = np.array(values, copy=False)
+        self._variances = (
+            np.zeros_like(values)
+            if variances is None
+            else np.array(variances, copy=False)
+        )
+        self._counts = (
+            np.ones_like(values) if counts is None else np.array(counts, copy=False)
+        )
         self._sort_order = None
         self._extra_values = extra_values or {}
 
@@ -246,16 +252,15 @@ class ValuationResult(
                 self._names = np.copy(indices)
             else:
                 self._names = np.arange(len(self._values), dtype=np.int_)
-        elif not isinstance(data_names, np.ndarray):
-            self._names = np.array(data_names)
         else:
-            self._names = data_names.copy()
+            self._names = np.array(data_names, copy=True)
+
         if len(np.unique(self._names)) != len(self._names):
             raise ValueError("Data names must be unique")
 
         if indices is None:
             indices = np.arange(len(self._values), dtype=np.int_)
-        self._indices = indices
+        self._indices = np.array(indices, dtype=np.int_, copy=False)
         self._positions = {idx: pos for pos, idx in enumerate(indices)}
 
         self._sort_positions: NDArray[np.int_] = np.arange(
@@ -800,4 +805,25 @@ class ValuationResult(
             values=np.zeros(len(indices)),
             variances=np.zeros(len(indices)),
             counts=np.zeros(len(indices), dtype=np.int_),
+        )
+
+    def subset(
+        self, indices: Sequence[IndexT] | NDArray[IndexT]
+    ) -> ValuationResult[IndexT, NameT]:
+        """Returns a subset of the ValuationResult.
+
+        Args:
+            indices: Indices of the subset.
+
+        Returns:
+            A new ValuationResult with the subset of values.
+        """
+        return ValuationResult(
+            algorithm=self.algorithm,
+            status=self.status,
+            indices=self._indices[indices],
+            values=self._values[indices],
+            variances=self._variances[indices],
+            counts=self._counts[indices],
+            data_names=self._names[indices],
         )
