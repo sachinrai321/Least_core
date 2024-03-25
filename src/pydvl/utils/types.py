@@ -4,7 +4,7 @@ transformations. Some of it probably belongs elsewhere.
 from __future__ import annotations
 
 from abc import ABCMeta
-from typing import Any, Optional, Protocol, TypeVar, Union, cast
+from typing import Any, Optional, Protocol, Sequence, Set, TypeVar, Union, cast
 
 import numpy as np
 from numpy.random import Generator, SeedSequence
@@ -22,7 +22,9 @@ __all__ = [
     "SupervisedModel",
 ]
 
-IndexT = TypeVar("IndexT", bound=np.int_)
+IndexT = TypeVar("IndexT", bound=np.int_)  # FIXME: this is a mess / useless / bogus
+IndexSetT = Union[Set[IndexT], Sequence[IndexT], NDArray[IndexT]]
+
 NameT = TypeVar("NameT", np.object_, np.int_)
 R = TypeVar("R", covariant=True)
 Seed = Union[int, Generator]

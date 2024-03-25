@@ -68,7 +68,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from pydvl.utils.numeric import powerset, random_subset, random_subset_of_size
-from pydvl.utils.types import IndexT, Seed
+from pydvl.utils.types import IndexSetT, IndexT, Seed
 
 __all__ = [
     "AntitheticSampler",
@@ -82,7 +82,7 @@ __all__ = [
 ]
 
 SampleT = Tuple[IndexT, NDArray[IndexT]]
-Sequence.register(np.ndarray)
+Sequence.register(np.ndarray)  # <- Doesn't seem to work
 
 
 class PowersetSampler(abc.ABC, Iterable[SampleT], Generic[IndexT]):
@@ -126,9 +126,9 @@ class PowersetSampler(abc.ABC, Iterable[SampleT], Generic[IndexT]):
 
     def __init__(
         self,
-        indices: NDArray[IndexT],
+        indices: IndexSetT[IndexT],
         index_iteration: IndexIteration = IndexIteration.Sequential,
-        outer_indices: NDArray[IndexT] | None = None,
+        outer_indices: IndexSetT[IndexT] | None = None,
         **kwargs,
     ):
         """
@@ -140,7 +140,7 @@ class PowersetSampler(abc.ABC, Iterable[SampleT], Generic[IndexT]):
                 in succession. For embarrassingly parallel computations, this set
                 is sliced and the samplers are used to iterate over the slices.
         """
-        self._indices = indices
+        self._indices = np.array(indices, copy=False)
         self._index_iteration = index_iteration
         self._outer_indices = outer_indices if outer_indices is not None else indices
         self._n = len(indices)
@@ -162,7 +162,7 @@ class PowersetSampler(abc.ABC, Iterable[SampleT], Generic[IndexT]):
     def n_samples(self, n: int):
         raise AttributeError("Cannot reset a sampler's number of samples")
 
-    def complement(self, exclude: Sequence[IndexT]) -> NDArray[IndexT]:
+    def complement(self, exclude: IndexSetT[IndexT]) -> NDArray[IndexT]:
         return np.setxor1d(self._indices, exclude)  # type: ignore
 
     def iterindices(self) -> Iterator[IndexT]:
@@ -238,7 +238,7 @@ class StochasticSamplerMixin:
 
 
 class DeterministicUniformSampler(PowersetSampler[IndexT]):
-    def __init__(self, indices: NDArray[IndexT], *args, **kwargs):
+    def __init__(self, indices: IndexSetT[IndexT], *args, **kwargs):
         """An iterator to perform uniform deterministic sampling of subsets.
 
         For every index $i$, each subset of the complement `indices - {i}` is
