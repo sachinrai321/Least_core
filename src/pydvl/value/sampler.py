@@ -229,6 +229,25 @@ class PowersetSampler(abc.ABC, Iterable[SampleT], Generic[IndexT]):
         ...
 
 
+class LOOSampler(PowersetSampler[IndexT]):
+    """Leave-one-out sampler.
+
+    As first item, it returns the full set of indices.
+
+    Then, for each index in the set, it returns a tuple with an index and the
+    complement set.
+    """
+
+    def __iter__(self) -> Iterator[SampleT]:
+        yield {}, self.indices
+        for idx in self.iterindices():
+            yield idx, self.indices - {idx}
+
+    @classmethod
+    def weight(cls, n: int, subset_len: int) -> float:
+        return 1.0
+
+
 class StochasticSamplerMixin:
     """Mixin class for samplers which use a random number generator."""
 
