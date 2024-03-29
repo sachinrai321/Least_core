@@ -21,7 +21,7 @@ __all__ = [
     "TruncationPolicy",
     "NoTruncation",
     "FixedTruncation",
-    "BootstrapTruncation",
+    "DeviationTruncation",
     "RelativeTruncation",
 ]
 
@@ -146,7 +146,7 @@ class RelativeTruncation(TruncationPolicy):
         self.total_utility = u(u.data.indices)
 
 
-class BootstrapTruncation(TruncationPolicy):
+class DeviationTruncation(TruncationPolicy):
     """Break a permutation if the last computed utility is close to the total
     utility, measured as a multiple of the standard deviation of the utilities.
 

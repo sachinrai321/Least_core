@@ -166,7 +166,7 @@ def permutation_montecarlo_shapley(
     and one that stops if the last computed utility ("score") is close to the
     total utility using the standard deviation of the utility as a measure of
     proximity, implemented in
-    [BootstrapTruncation][pydvl.value.shapley.truncated.BootstrapTruncation].
+    [DeviationTruncation][pydvl.value.shapley.truncated.DeviationTruncation].
 
     We keep sampling permutations and updating all shapley values
     until the [StoppingCriterion][pydvl.value.stopping.StoppingCriterion] returns
