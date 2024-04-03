@@ -4,7 +4,7 @@ library.
 """
 from __future__ import annotations
 
-from itertools import chain, combinations
+from itertools import combinations
 from typing import (
     Collection,
     Generator,
@@ -36,7 +36,7 @@ __all__ = [
 T = TypeVar("T", bound=np.generic)
 
 
-def powerset(s: NDArray[T]) -> Iterator[Collection[T]]:
+def powerset(s: NDArray[T]) -> Generator[NDArray[T], None, None]:
     """Returns an iterator for the power set of the argument.
 
      Subsets are generated in sequence by growing size. See
@@ -57,7 +57,9 @@ def powerset(s: NDArray[T]) -> Iterator[Collection[T]]:
     Returns:
         An iterator over all subsets of the set of indices `s`.
     """
-    return chain.from_iterable(combinations(s, r) for r in range(len(s) + 1))
+    for r in range(len(s) + 1):
+        for i in combinations(s, r):
+            yield np.array(i)
 
 
 def num_samples_permutation_hoeffding(eps: float, delta: float, u_range: float) -> int:

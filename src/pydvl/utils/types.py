@@ -14,6 +14,7 @@ __all__ = [
     "ensure_seed_sequence",
     "LossFunction",
     "IndexT",
+    "IndexSetT",
     "NameT",
     "MapFunction",
     "NoPublicConstructor",
@@ -28,6 +29,7 @@ IndexSetT = Union[Set[IndexT], Sequence[IndexT], NDArray[IndexT]]
 NameT = TypeVar("NameT", np.object_, np.int_)
 R = TypeVar("R", covariant=True)
 Seed = Union[int, Generator]
+TargetT = TypeVar("TargetT")
 
 
 class MapFunction(Protocol[R]):
