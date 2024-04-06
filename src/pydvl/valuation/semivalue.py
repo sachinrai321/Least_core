@@ -22,11 +22,19 @@ from __future__ import annotations
 
 from abc import abstractmethod
 
-from pydvl.valuation.base import Valuation
+from joblib import Parallel, delayed
+from tqdm import tqdm
+
+from pydvl.valuation.base import (
+    Valuation,
+    ensure_backend_has_generator_return,
+    make_parallel_flag,
+)
+from pydvl.valuation.dataset import Dataset
 from pydvl.valuation.result import ValuationResult
 from pydvl.valuation.samplers import IndexSampler
 from pydvl.valuation.stopping import StoppingCriterion
-from pydvl.valuation.utility.evaluator import UtilityEvaluator
+from pydvl.valuation.utility.base import UtilityBase
 
 __all__ = ["SemivalueValuation"]
 
@@ -44,24 +52,26 @@ class SemivalueValuation(Valuation):
         TODO: see ...
 
     Args:
-        evaluator: object to compute utilities.
+        utility: Object to compute utilities.
         sampler: Sampling scheme to use.
         is_done: Stopping criterion to use.
+        progress: Whether to show a progress bar.
     """
 
     algorithm_name = "Semi-Value"
 
     def __init__(
         self,
-        evaluator: UtilityEvaluator,
+        utility: UtilityBase,
         sampler: IndexSampler,
         is_done: StoppingCriterion,
+        progress: bool = False,
     ):
         super().__init__()
-        self.evaluator = evaluator
+        self.utility = utility
         self.sampler = sampler
-        self.data = evaluator.utility.data
         self.is_done = is_done
+        self.progress = progress
 
     @abstractmethod
     def coefficient(self, n: int, k: int) -> float:
@@ -73,23 +83,30 @@ class SemivalueValuation(Valuation):
         """
         ...
 
-    def fit(self):
+    def fit(self, data: Dataset):
         self.result = ValuationResult.zeros(
             # TODO: automate str representation for all Valuations
-            algorithm=f"{self.__class__.__name__}-{self.sampler.__class__.__name__}-{self.evaluator.utility.model}-{self.is_done}",
-            indices=self.data.indices,
-            data_names=self.data.data_names,
+            algorithm=f"{self.__class__.__name__}-{self.sampler.__class__.__name__}-{self.utility.model}-{self.is_done}",
+            indices=data.indices,
+            data_names=data.data_names,
         )
 
-        strategy = self.sampler.strategy()
+        ensure_backend_has_generator_return()
+        flag = make_parallel_flag()
 
-        with self.evaluator as evaluator:
-            strategy.setup(evaluator.utility, self.coefficient)
-            for batch in evaluator.map(strategy.process, self.sampler):
-                for evaluation in batch:
-                    self.result.update(evaluation.idx, evaluation.update)
-                if self.is_done(self.result):
-                    evaluator.interrupt()
+        self.utility.training_data = data
+        parallel = Parallel(return_as="generator_unordered")
+        strategy = self.sampler.make_strategy(self.utility, self.coefficient)
+        processor = delayed(strategy.process)
+        delayed_evals = parallel(
+            processor(batch=list(batch), is_interrupted=flag) for batch in self.sampler
+        )
+        for batch in tqdm(iterable=delayed_evals, disable=not self.progress):
+            for evaluation in batch:
+                self.result.update(evaluation.idx, evaluation.update)
+            if self.is_done(self.result):
+                flag.set()
+                break
 
         # FIXME: remove NaN checking after fit()?
         import logging

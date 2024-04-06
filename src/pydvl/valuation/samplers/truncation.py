@@ -29,6 +29,7 @@ import numpy as np
 from pydvl.utils import running_moments
 from pydvl.valuation.types import Sample
 from pydvl.valuation.utility import Utility
+from pydvl.valuation.utility.base import UtilityBase
 
 __all__ = [
     "TruncationPolicy",
@@ -68,7 +69,7 @@ class TruncationPolicy(ABC):
         ...
 
     @abstractmethod
-    def reset(self, utility: Utility):
+    def reset(self, utility: UtilityBase):
         """(Re)set the policy to a state ready for a new batch."""
         ...
 
@@ -160,11 +161,13 @@ class RelativeTruncation(TruncationPolicy):
             raise ValueError("RelativeTruncation not set up. Call reset() first.")
         return super().__call__(idx, score, batch_size)
 
-    def reset(self, utility: Utility):
+    def reset(self, utility: UtilityBase):
         if self._is_setup:
             return
         logger.info("Computing total utility for RelativeTruncation.")
-        self.total_utility = utility(Sample(None, frozenset(utility.data.indices)))
+        self.total_utility = utility(
+            Sample(None, frozenset(utility.training_data.indices))
+        )
         self._is_setup = True
 
 
@@ -216,11 +219,13 @@ class DeviationTruncation(TruncationPolicy):
             raise ValueError("DeviationPolicy not set up. Call reset() first.")
         return super().__call__(idx, score, batch_size)
 
-    def reset(self, utility: Utility):
+    def reset(self, utility: UtilityBase):
         self.count = 0
         self.variance = self.mean = 0.0
         if self._is_setup:
             return
         logger.info("Computing total utility for DeviationTruncation.")
-        self.total_utility = utility(Sample(None, frozenset(utility.data.indices)))
+        self.total_utility = utility(
+            Sample(None, frozenset(utility.training_data.indices))
+        )
         self._is_setup = True

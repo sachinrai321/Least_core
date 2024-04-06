@@ -20,11 +20,9 @@ from pydvl.valuation.result import ValuationResult
 from pydvl.valuation.samplers import LOOSampler
 from pydvl.valuation.semivalue import SemivalueValuation
 from pydvl.valuation.stopping import MinUpdates
-from pydvl.valuation.utility.evaluator import UtilityEvaluator
+from pydvl.valuation.utility.base import UtilityBase
 
 __all__ = ["LOOValuation"]
-
-from pydvl.value import make_criterion
 
 
 class LOOValuation(SemivalueValuation):
@@ -34,13 +32,14 @@ class LOOValuation(SemivalueValuation):
 
     algorithm_name = "Leave-One-Out"
 
-    def __init__(self, evaluator: UtilityEvaluator):
+    def __init__(self, utility: UtilityBase, progress: bool = False):
         self.result: ValuationResult | None = None
         super().__init__(
-            evaluator,
-            LOOSampler(evaluator.utility.data.indices),
+            utility,
+            LOOSampler(utility.test_data.indices),
             # LOO is done when every index has been updated once
             MinUpdates(n_updates=1),
+            progress=progress,
         )
 
     def coefficient(self, n: int, k: int) -> float:

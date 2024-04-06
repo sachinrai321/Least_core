@@ -4,17 +4,22 @@ import logging
 from typing import Callable, Generator
 
 import numpy as np
+from joblib import Parallel, delayed
 from numpy.typing import NDArray
+from tqdm import tqdm
 
-from pydvl.valuation.base import Valuation
+from pydvl.valuation.base import (
+    Valuation,
+    ensure_backend_has_generator_return,
+    make_parallel_flag,
+)
+from pydvl.valuation.dataset import Dataset
 from pydvl.valuation.result import ValuationResult
 from pydvl.valuation.samplers import IndexSampler, PowersetSampler
 from pydvl.valuation.scorers.classwise import ClasswiseScorer
 from pydvl.valuation.stopping import StoppingCriterion
-from pydvl.valuation.types import NullaryPredicate, ValueUpdate
-from pydvl.valuation.utility import Utility
+from pydvl.valuation.utility.base import UtilityBase
 from pydvl.valuation.utility.classwise import CSSample
-from pydvl.valuation.utility.evaluator import UtilityEvaluator
 
 __all__ = ["ClasswiseShapley"]
 
@@ -32,35 +37,38 @@ def unique_labels(array: NDArray) -> NDArray:
 class ClasswiseShapley(Valuation):
     def __init__(
         self,
-        evaluator: UtilityEvaluator,
-        in_class_sampler_factory: Callable[[...], IndexSampler],
-        out_of_class_sampler_factory: Callable[[...], PowersetSampler],
+        utility: UtilityBase,
+        # TODO: create the factories
+        in_class_sampler_factory: Callable[..., IndexSampler],
+        out_of_class_sampler_factory: Callable[..., PowersetSampler],
         is_done: StoppingCriterion,
+        progress: bool = False,
     ):
         super().__init__()
-        self.evaluator = evaluator
-        self.data = evaluator.utility.data
-        if not isinstance(evaluator.utility.scorer, ClasswiseScorer):
+        self.utility = utility
+        self.labels: NDArray | None = None
+        if not isinstance(utility.scorer, ClasswiseScorer):
             raise ValueError("Scorer must be a ClasswiseScorer.")
-        self.scorer: ClasswiseScorer = evaluator.utility.scorer
+        self.scorer: ClasswiseScorer = utility.scorer
         self.in_class_sampler_factory = in_class_sampler_factory
         self.out_of_class_sampler_factory = out_of_class_sampler_factory
-        self.inner_sampler: PowersetSampler | None = None
-        self.outer_sampler: IndexSampler | None = None
+        self.inner_sampler: IndexSampler | None = None
+        self.outer_sampler: PowersetSampler | None = None
         self.is_done = is_done
+        self.progress = progress
 
-    def indices_without_label(self, label: int):
-        return np.where(self.data.y_train != label)[0]
+    def indices_without_label(self, data: Dataset, label: int):
+        return np.where(data.y != label)[0]
 
-    def indices_with_label(self, label):
-        return np.where(self.data.y_train == label)[0]
+    def indices_with_label(self, data: Dataset, label: int):
+        return np.where(data.y == label)[0]
 
-    def sampler(self, label: int) -> Generator[CSSample, None, None]:
+    def sampler(self, data: Dataset, label: int) -> Generator[CSSample, None, None]:
         self.outer_sampler = self.out_of_class_sampler_factory(
-            self.indices_without_label(label)
+            self.indices_without_label(data, label)
         )
         self.inner_sampler = self.in_class_sampler_factory(
-            self.indices_with_label(label)
+            self.indices_with_label(data, label)
         )
         for out_of_class_sample in self.outer_sampler.generate():
             for in_class_sample in self.inner_sampler.generate():
@@ -73,35 +81,32 @@ class ClasswiseShapley(Valuation):
                     in_class_subset=in_class_sample.subset,
                 )
 
-    # TODO: Do I need this? If the utility accepted Sample, we could subclass
-    #  for CSShapley and use whatever EvaluationStrategy directly (typically
-    #  PermuationEvaluationStrategy)
-    def batch_processor(
-        self, utility: Utility, is_interrupted: NullaryPredicate, batch: list[CSSample]
-    ) -> list[ValueUpdate]:
-        for sample in batch:
-            self.scorer.label = sample.label
-            # TODO do stuff
-            raise NotImplementedError
-
-    def fit(self):
+    def fit(self, data: Dataset):
         self.result = ValuationResult.zeros(
             # TODO: automate str representation for all Valuations
             algorithm=f"classwise-shapley",
-            indices=self.data.indices,
-            data_names=self.data.data_names,
+            indices=data.indices,
+            data_names=data.data_names,
         )
+        ensure_backend_has_generator_return()
+        flag = make_parallel_flag()
+        parallel = Parallel(return_as="generator_unordered")
 
-        labels = unique_labels(np.concatenate((self.data.y_train, self.data.y_test)))
+        self.utility.training_data = data
+        self.labels = unique_labels(np.concatenate((data.y, self.utility.test_data.y)))
 
-        with self.evaluator as evaluator:
-            for label in labels:
-                sampler = self.sampler(label)
-                strategy = self.inner_sampler.strategy()
-                for evaluation in evaluator.map(strategy.process, sampler):
-                    self.result.update(evaluation.idx, evaluation.update)
-                    if self.is_done(self.result):
-                        evaluator.interrupt()  # FIXME: does this work?
+        for label in self.labels:
+            sampler = self.sampler(data, label)
+            strategy = self.inner_sampler.make_strategy(self.utility)
+            processor = delayed(strategy.process)
+            delayed_evals = parallel(
+                processor(batch=list(batch), is_interrupted=flag) for batch in sampler
+            )
+            for evaluation in tqdm(iterable=delayed_evals, disable=not self.progress):
+                self.result.update(evaluation.idx, evaluation.update)
+                if self.is_done(self.result):
+                    flag.set()
+                    break
 
     def _normalize(self) -> ValuationResult:
         r"""
@@ -116,21 +121,22 @@ class ClasswiseShapley(Valuation):
             Normalized ValuationResult object.
         """
         assert self.result is not None
-        u = self.evaluator.utility
-        unique_labels = np.unique(np.concatenate((u.data.y_train, u.data.y_test)))
+        assert self.utility.training_data is not None
+
+        u = self.utility
 
         logger.info("Normalizing valuation result.")
-        u.model.fit(u.data.x_train, u.data.y_train)
+        u.model.fit(u.training_data.x, u.training_data.y)
 
-        for idx_label, label in enumerate(unique_labels):
+        for idx_label, label in enumerate(self.labels):
             self.scorer.label = label
-            active_elements = u.data.y_train == label
+            active_elements = u.training_data.y == label
             indices_label_set = np.where(active_elements)[0]
-            indices_label_set = u.data.indices[indices_label_set]
+            indices_label_set = u.training_data.indices[indices_label_set]
 
             self.scorer.label = label
             in_class_acc, _ = self.scorer.estimate_in_class_and_out_of_class_score(
-                u.model, u.data.x_test, u.data.y_test
+                u.model, u.test_data.x, u.test_data.y
             )
 
             sigma = np.sum(self.result.values[indices_label_set])

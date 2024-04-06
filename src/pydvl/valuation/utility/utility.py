@@ -2,33 +2,23 @@ from __future__ import annotations
 
 import logging
 import warnings
-from typing import Generic, Optional, Tuple, TypeVar, Union, cast
+from typing import Optional, Tuple, Union, cast
 
 import numpy as np
 from sklearn.base import clone
 from sklearn.metrics import check_scoring
 
 from pydvl.utils.caching import CacheBackend, CachedFuncConfig, CacheStats
-from pydvl.utils.dataset import Dataset
 from pydvl.utils.types import SupervisedModel
+from pydvl.valuation.dataset import Dataset
 from pydvl.valuation.scorers.scorer import Scorer
-from pydvl.valuation.types import Sample
+from pydvl.valuation.types import Sample, SampleT
 
 __all__ = ["Utility"]
 
+from pydvl.valuation.utility.base import UtilityBase
+
 logger = logging.getLogger(__name__)
-SampleT = TypeVar("SampleT", bound=Sample)
-
-
-class UtilityBase(Generic[SampleT]):
-    model: SupervisedModel
-    data: Dataset
-    scorer: Scorer
-    default_score: float
-    score_range: tuple[float, float]
-
-    def __call__(self, sample: SampleT) -> float:
-        ...
 
 
 # Need a generic because subclasses might use subtypes of Sample
@@ -68,7 +58,7 @@ class Utility(UtilityBase[SampleT]):
     Args:
         model: Any supervised model. Typical choices can be found in the
             [sci-kit learn documentation][https://scikit-learn.org/stable/supervised_learning.html].
-        data: [Dataset][pydvl.utils.dataset.Dataset]
+        test_data: [Dataset][pydvl.utils.dataset.Dataset]
             or [GroupedDataset][pydvl.utils.dataset.GroupedDataset] instance.
         scorer: A scoring object. If None, the `score()` method of the model
             will be used. See [score][pydvl.utils.score] for ways to create
@@ -126,13 +116,13 @@ class Utility(UtilityBase[SampleT]):
     """
 
     model: SupervisedModel
-    data: Dataset
+    test_data: Dataset
     scorer: Scorer
 
     def __init__(
         self,
         model: SupervisedModel,
-        data: Dataset,
+        test_data: Dataset,
         scorer: Optional[Union[str, Scorer]] = None,
         *,
         default_score: float = 0.0,
@@ -144,7 +134,7 @@ class Utility(UtilityBase[SampleT]):
         clone_before_fit: bool = True,
     ):
         self.model = self._clone_model(model)
-        self.data = data
+        self.test_data = test_data
         if isinstance(scorer, str):
             scorer = Scorer(scorer, default=default_score, range=score_range)
         self.scorer = check_scoring(self.model, scorer)
@@ -162,7 +152,7 @@ class Utility(UtilityBase[SampleT]):
         # TODO: Find a better way to do this.
         if cached_func_options.hash_prefix is None:
             # FIX: This does not handle reusing the same across runs.
-            cached_func_options.hash_prefix = str(hash((model, data, scorer)))
+            cached_func_options.hash_prefix = str(hash((model, test_data, scorer)))
         self.cached_func_options = cached_func_options
         self._initialize_utility_wrapper()
 
@@ -207,8 +197,11 @@ class Utility(UtilityBase[SampleT]):
         if len(sample.subset) == 0:
             return self.default_score
 
-        x_train, y_train = self.data.get_training_data(list(sample.subset))
-        x_test, y_test = self.data.get_test_data()
+        if self.training_data is None:
+            raise ValueError("No training data provided")
+
+        x_train, y_train = self.training_data.get_data(list(sample.subset))
+        x_test, y_test = self.test_data.get_data()
 
         with warnings.catch_warnings():
             if not self.show_warnings:

@@ -3,9 +3,10 @@ import scipy as sp
 from pydvl.valuation.samplers.base import IndexSampler
 from pydvl.valuation.semivalue import SemivalueValuation
 from pydvl.valuation.stopping import StoppingCriterion
-from pydvl.valuation.utility.evaluator import UtilityEvaluator
 
 __all__ = ["BetaShapleyValuation"]
+
+from pydvl.valuation.utility.base import UtilityBase
 
 
 class BetaShapleyValuation(SemivalueValuation):
@@ -15,13 +16,13 @@ class BetaShapleyValuation(SemivalueValuation):
 
     def __init__(
         self,
-        evaluator: UtilityEvaluator,
+        utility: UtilityBase,
         sampler: IndexSampler,
         is_done: StoppingCriterion,
         alpha: float,
         beta: float,
     ):
-        super().__init__(evaluator, sampler, is_done)
+        super().__init__(utility, sampler, is_done)
 
         self.alpha = alpha
         self.beta = beta

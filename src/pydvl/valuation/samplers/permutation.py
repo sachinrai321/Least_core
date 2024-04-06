@@ -21,11 +21,12 @@ from __future__ import annotations
 import logging
 import math
 import warnings
+from copy import copy
 from itertools import permutations
 from typing import Callable
 
 from pydvl.utils.types import Seed
-from pydvl.valuation.samplers import EvaluationStrategy, IndexSampler
+from pydvl.valuation.samplers.base import EvaluationStrategy, IndexSampler
 from pydvl.valuation.samplers.truncation import NoTruncation, TruncationPolicy
 from pydvl.valuation.samplers.utils import StochasticSamplerMixin
 from pydvl.valuation.types import (
@@ -36,7 +37,7 @@ from pydvl.valuation.types import (
     SampleGenerator,
     ValueUpdate,
 )
-from pydvl.valuation.utility import Utility
+from pydvl.valuation.utility.base import UtilityBase
 
 __all__ = [
     "PermutationSampler",
@@ -108,8 +109,12 @@ class PermutationSampler(StochasticSamplerMixin, IndexSampler):
     def weight(n: int, subset_len: int) -> float:
         return n * math.comb(n - 1, subset_len) if n > 0 else 1.0
 
-    def strategy(self) -> PermutationEvaluationStrategy:
-        return PermutationEvaluationStrategy(self)
+    def make_strategy(
+        self,
+        utility: UtilityBase,
+        coefficient: Callable[[int, int], float] | None = None,
+    ) -> PermutationEvaluationStrategy:
+        return PermutationEvaluationStrategy(self, utility, coefficient)
 
 
 class AntitheticPermutationSampler(PermutationSampler):
@@ -163,43 +168,32 @@ class PermutationEvaluationStrategy(EvaluationStrategy[PermutationSampler]):
     utility wrt. the previous one at each step to save computation.
     """
 
-    def __init__(self, sampler: PermutationSampler):
-        super().__init__(sampler)
-        self.n = len(sampler.indices)
-        self.truncation = sampler.truncation
-
-    def setup(
+    def __init__(
         self,
-        utility: Utility,
+        sampler: PermutationSampler,
+        utility: UtilityBase,
         coefficient: Callable[[int, int], float] | None = None,
     ):
-        super().setup(utility, coefficient)
+        super().__init__(sampler, utility, coefficient)
+        self.truncation = copy(sampler.truncation)
         self.truncation.reset(utility)  # Perform initial setup (e.g. total_utility)
-        self._is_setup = True
 
     def process(
-        self,
-        utility: Utility,
-        is_interrupted: NullaryPredicate,
-        permutation: SampleBatch,
+        self, batch: SampleBatch, is_interrupted: NullaryPredicate
     ) -> list[ValueUpdate]:
-        if not self._is_setup:
-            raise ValueError("Evaluation strategy not set up")
-        self.truncation.reset(utility)  # Reset before every batch (will be cached)
+        self.truncation.reset(self.utility)  # Reset before every batch (will be cached)
         r = []
         truncated = False
-        curr = prev = utility.default_score
-        for sample in permutation:
+        curr = prev = self.utility.default_score
+        for sample in batch:
             assert sample.idx is not None
             if not truncated:
-                # FIXME: If utility accepted Samples, we could subclass for CSShapley
-                #   and use this strategy directly
-                curr = utility(sample)
+                curr = self.utility(sample)
             marginal = curr - prev
-            marginal *= self.coefficient(self.n, len(sample.subset))
+            marginal *= self.coefficient(self.n_indices, len(sample.subset))
             r.append(ValueUpdate(sample.idx, marginal))
             prev = curr
-            if not truncated and self.truncation(sample.idx, curr, self.n):
+            if not truncated and self.truncation(sample.idx, curr, self.n_indices):
                 truncated = True
             if is_interrupted():
                 break

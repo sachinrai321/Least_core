@@ -45,7 +45,7 @@ from numpy.typing import NDArray
 
 from pydvl.utils.numeric import powerset, random_subset, random_subset_of_size
 from pydvl.utils.types import Seed
-from pydvl.valuation.samplers.base import EvaluationStrategy, IndexSampler, SamplerType
+from pydvl.valuation.samplers.base import EvaluationStrategy, IndexSampler, SamplerT
 from pydvl.valuation.samplers.utils import StochasticSamplerMixin
 from pydvl.valuation.types import (
     IndexSetT,
@@ -56,8 +56,7 @@ from pydvl.valuation.types import (
     SampleGenerator,
     ValueUpdate,
 )
-from pydvl.valuation.utility import Utility
-from pydvl.valuation.utility.evaluator import UtilityEvaluator
+from pydvl.valuation.utility.base import UtilityBase
 
 __all__ = [
     "AntitheticSampler",
@@ -164,8 +163,12 @@ class PowersetSampler(IndexSampler, ABC):
             )
         raise TypeError("Indices must be an iterable or a slice")
 
-    def strategy(self) -> PowersetEvaluationStrategy:
-        return PowersetEvaluationStrategy(self)
+    def make_strategy(
+        self,
+        utility: UtilityBase,
+        coefficient: Callable[[int, int], float] | None = None,
+    ) -> PowersetEvaluationStrategy:
+        return PowersetEvaluationStrategy(self, utility, coefficient)
 
     def generate(self) -> SampleGenerator:
         """Generates samples iterating in sequence over the outer indices, then over
@@ -188,24 +191,16 @@ class PowersetSampler(IndexSampler, ABC):
 
 
 class PowersetEvaluationStrategy(EvaluationStrategy[PowersetSampler]):
-    def __init__(self, sampler: PowersetSampler):
-        # Careful not to reference the sampler directly here to avoid copying it to
-        # workers
-        super().__init__(sampler)
-        self.n_samples = len(sampler.indices)
-
     def process(
-        self, utility: Utility, is_interrupted: NullaryPredicate, batch: SampleBatch
+        self, batch: SampleBatch, is_interrupted: NullaryPredicate
     ) -> list[ValueUpdate]:
-        if not self._is_setup:
-            raise ValueError("PowersetEvaluationStrategy not set up")
         r = []
         for sample in batch:
-            u_i = utility(
+            u_i = self.utility(
                 Sample(sample.idx, frozenset({sample.idx}.union(sample.subset)))
             )
-            u = utility(sample)
-            marginal = (u_i - u) * self.coefficient(self.n_samples, len(sample.subset))
+            u = self.utility(sample)
+            marginal = (u_i - u) * self.coefficient(self.n_indices, len(sample.subset))
             r.append(ValueUpdate(sample.idx, marginal))
             if is_interrupted():
                 break
@@ -228,40 +223,35 @@ class LOOSampler(PowersetSampler):
     def weight(n: int, subset_len: int) -> float:
         return 1.0
 
-    def strategy(self) -> EvaluationStrategy:
-        return LOOEvaluationStrategy(self)
+    def make_strategy(
+        self,
+        utility: UtilityBase,
+        coefficient: Callable[[int, int], float] | None = None,
+    ) -> EvaluationStrategy:
+        return LOOEvaluationStrategy(self, utility, coefficient)
 
 
 class LOOEvaluationStrategy(EvaluationStrategy[LOOSampler]):
     """Computes marginal values for LOO."""
 
-    def __init__(self, sampler: LOOSampler):
-        super().__init__(sampler)  # noop
-        self.total_utility = 0.0
-        self.n_samples = len(sampler.indices)
-        self.indices = sampler.indices
-
-    def setup(
+    def __init__(
         self,
-        utility: Utility,
+        sampler: LOOSampler,
+        utility: UtilityBase,
         coefficient: Callable[[int, int], float] | None = None,
     ):
-        super().setup(utility, coefficient)
-        self.total_utility = utility(Sample(None, frozenset(self.indices)))
-        self.indices = None  # Is this enough to avoid copy? (Not that matters but...)
-        self._is_setup = True
+        super().__init__(sampler, utility, coefficient)
+        self.total_utility = utility(Sample(None, frozenset(sampler.indices)))
 
     def process(
-        self, utility: Utility, is_interrupted: NullaryPredicate, batch: SampleBatch
+        self, batch: SampleBatch, is_interrupted: NullaryPredicate
     ) -> list[ValueUpdate]:
-        if not self._is_setup:
-            raise ValueError("Evaluation strategy not set up")
         r = []
         for sample in batch:
             assert sample.idx is not None
-            u = utility(sample)
+            u = self.utility(sample)
             marginal = self.total_utility - u
-            marginal *= self.coefficient(self.n_samples, len(sample.subset))
+            marginal *= self.coefficient(self.n_indices, len(sample.subset))
             r.append(ValueUpdate(sample.idx, marginal))
             if is_interrupted():
                 break

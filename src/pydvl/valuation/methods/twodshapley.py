@@ -11,18 +11,21 @@ href="#liu_2dshapley_2023">1</a></sup>.
       40th International Conference on Machine Learning, 21730–55. PMLR, 2023.
 
 """
+from __future__ import annotations
+
 from pydvl.valuation.base import Valuation
+from pydvl.valuation.dataset import Dataset
 from pydvl.valuation.types import Sample
 
 
 class TwoDSample(Sample):
     """A sample for 2D-Shapley, consisting of a set of indices and a set of features."""
 
-    features: frozenset(int)
+    features: frozenset[int]
 
 
 class TwoDShapley(Valuation):
-    def fit(self):
+    def fit(self, data: Dataset):
         # With the right sampler and a subclassed utility, this should follow a very
         # similar pattern to the other methods.
         # Note that it should be trivial to generalize to other coefficients, sampling

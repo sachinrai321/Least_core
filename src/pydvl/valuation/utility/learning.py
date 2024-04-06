@@ -18,9 +18,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 from pydvl.utils import SupervisedModel
-from pydvl.valuation.types import IndexT, Sample
-from pydvl.valuation.utility import Utility
-from pydvl.valuation.utility.utility import SampleT, UtilityBase
+from pydvl.valuation.types import IndexT, Sample, SampleT
+from pydvl.valuation.utility.base import UtilityBase
 
 
 class DataUtilityLearning(UtilityBase[SampleT]):
@@ -39,26 +38,27 @@ class DataUtilityLearning(UtilityBase[SampleT]):
 
     ??? Example
         ``` pycon
-        >>> from pydvl.utils.dataset import Dataset
+        >>> from pydvl.valuation.dataset import Dataset
         >>> from pydvl.valuation.utility import Utility, DataUtilityLearning
         >>> from pydvl.valuation.types import Sample
         >>> from sklearn.linear_model import LinearRegression, LogisticRegression
         >>> from sklearn.datasets import load_iris
         >>>
-        >>> dataset = Dataset.from_sklearn(load_iris())
-        >>> u = Utility(LogisticRegression(), dataset)
+        >>> train, test = Dataset.from_sklearn(load_iris())
+        >>> u = Utility(LogisticRegression(), test)
+        >>> u.training_data = train
         >>> wrapped_u = DataUtilityLearning(u, 3, LinearRegression())
         ... # First 3 calls will be computed normally
         >>> for i in range(3):
-        ...     _ = wrapped_u(Sample(0, (i,)))
-        >>> wrapped_u(Sample(0, (1, 2, 3))) # Subsequent calls will be computed using the fit model for DUL
+        ...     _ = wrapped_u(Sample(0, frozenset((i,))))
+        >>> wrapped_u(Sample(0, frozenset(1, 2, 3))) # Subsequent calls will be computed using the fit model for DUL
         0.0
         ```
 
     """
 
     def __init__(
-        self, u: Utility, training_budget: int, model: SupervisedModel
+        self, u: UtilityBase, training_budget: int, model: SupervisedModel
     ) -> None:
         self.utility = u
         self.training_budget = training_budget
@@ -70,14 +70,18 @@ class DataUtilityLearning(UtilityBase[SampleT]):
     def _convert_indices_to_boolean_vector(
         self, x: Iterable[IndexT]
     ) -> NDArray[np.bool_]:
+        assert self.training_data is not None
         boolean_vector: NDArray[np.bool_] = np.zeros(
-            (1, len(self.utility.data)), dtype=bool
+            (1, len(self.utility.training_data)), dtype=np.bool_
         )
         if x is not None:
             boolean_vector[:, tuple(x)] = True
         return boolean_vector
 
     def __call__(self, sample: Sample) -> float:
+        if self.training_data is None:
+            raise ValueError("No training data set for utility")
+
         indices_boolean_vector = self._convert_indices_to_boolean_vector(sample.subset)
         if len(self._utility_samples) < self.training_budget:
             utility = self.utility(sample)

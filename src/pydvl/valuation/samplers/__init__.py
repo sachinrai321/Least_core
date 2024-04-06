@@ -18,20 +18,23 @@ data.
 
 Because different samplers require different strategies for evaluating the utility
 of the subsets, the samplers are used in conjunction with an
-[EvaluationStrategy][pydvl.valuation.samplers.base.EvaluationStrategy]. This strategy
-acts a mediator between a sampler and a
-[UtilityEvaluator][pydvl.valuation.utility.evaluator.UtilityEvaluator]. The basic usage
-pattern inside a valuation method is the following:
+[EvaluationStrategy][pydvl.valuation.samplers.base.EvaluationStrategy]. The
+basic usage pattern inside a valuation method is the following:
 
 ```python
-    def fit(self):
-        strategy = self.sampler.strategy()
-        with self.evaluator as evaluator:
-            for batch in evaluator.map(strategy.process, self.sampler)
-                for evaluation in batch:
-                    self.result.update(evaluation.idx, evaluation.update)
-                if self.is_done(self.result):
-                    evaluator.interrupt()
+    def fit(self, data: Dataset):
+        self.utility.training_data = data
+        strategy = self.sampler.strategy(self.utility, self.coefficient)
+        delayed_batches = Parallel()(
+            delayed(strategy.process)(batch=list(batch), is_interrupted=flag)
+            for batch in self.sampler
+        )
+        for batch in delayed_batches:
+            for evaluation in batch:
+                self.result.update(evaluation.idx, evaluation.update)
+            if self.is_done(self.result):
+                flag.set()
+                break
 ```
 
 See more on the [EvaluationStrategy][pydvl.valuation.samplers.base.EvaluationStrategy]
@@ -61,9 +64,9 @@ the marginal evaluations for `PowersetSampler` or the successive evaluations for
 `strategy_cls` attribute of the sampler to this class.
 
 
-!!! tip "Changed in version 0.9.0"
-    All the samplers in this module have been changed to work with the new utility
-    evaluator.
+!!! tip "Changed in version 0.10.0"
+    All the samplers in this module have been changed to work with the new
+    evaluation strategies.
 
 ## References
 
@@ -78,7 +81,6 @@ the marginal evaluations for `PowersetSampler` or the successive evaluations for
 """
 from typing import Union
 
-from .base import *
 from .permutation import *
 from .powerset import *
 

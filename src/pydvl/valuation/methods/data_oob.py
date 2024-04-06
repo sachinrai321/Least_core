@@ -37,10 +37,11 @@ from numpy.typing import NDArray
 from sklearn.base import is_classifier, is_regressor
 from sklearn.ensemble import BaggingClassifier, BaggingRegressor
 
-from pydvl.utils import Dataset, Seed, SupervisedModel
+from pydvl.utils import Seed, SupervisedModel
 from pydvl.valuation.base import Valuation
+from pydvl.valuation.dataset import Dataset
+from pydvl.valuation.result import ValuationResult
 from pydvl.valuation.types import LossFunction
-from pydvl.value import ValuationResult
 
 T = TypeVar("T", bound=np.number)
 
@@ -62,50 +63,42 @@ class DataOOBValuation(Valuation):
         max_samples: The fraction of samples to draw to train each base estimator.
         loss: A function taking as parameters model prediction and corresponding
             data labels(y_true, y_pred) and returning an array of point-wise errors.
-        n_jobs: The number of jobs to run in parallel used in the bagging
-            procedure for both fit and predict.
         seed: Either an instance of a numpy random number generator or a seed
             for it.
 
     Returns:
         Object with the data values.
 
-    FIXME: this is the bogus pydvl implementation of the Data-OOB valuation method.
+    FIXME: this is an extended pydvl implementation of the Data-OOB valuation method
       which just bags whatever model is passed to it. The paper only considers bagging
       models as input.
     """
 
     def __init__(
         self,
-        data: Dataset,
         model: SupervisedModel,
         n_estimators: int,
         max_samples: float = 0.8,
         loss: LossFunction | None = None,
-        n_jobs: int | None = None,
         seed: Seed | None = None,
     ):
         super().__init__()
-        self.data = data
         self.model = model
         self.n_estimators = n_estimators
         self.max_samples = max_samples
         self.loss = loss
-        self.n_jobs = n_jobs
-
         self.rng = np.random.default_rng(seed)
-        self.result = None
 
-    def fit(self):
+    def fit(self, data: Dataset):
         # TODO: automate str representation for all Valuations
         algorithm_name = f"Data-OOB-{str(self.model)}"
         self.result = ValuationResult.zeros(
             algorithm=algorithm_name,
-            indices=self.data.indices,
-            data_names=self.data.data_names,
+            indices=data.indices,
+            data_names=data.data_names,
         )
 
-        random_state = np.random.RandomState(rng.bit_generator)
+        random_state = np.random.RandomState(self.rng.bit_generator)
 
         if is_classifier(self.model):
             logger.info(f"Training BaggingClassifier using {self.model}")
@@ -113,7 +106,6 @@ class DataOOBValuation(Valuation):
                 self.model,
                 n_estimators=self.n_estimators,
                 max_samples=self.max_samples,
-                n_jobs=self.n_jobs,
                 random_state=random_state,
             )
             if self.loss is None:
@@ -124,7 +116,6 @@ class DataOOBValuation(Valuation):
                 self.model,
                 n_estimators=self.n_estimators,
                 max_samples=self.max_samples,
-                n_jobs=self.n_jobs,
                 random_state=random_state,
             )
             if self.loss is None:
@@ -134,18 +125,18 @@ class DataOOBValuation(Valuation):
                 "Model has to be a classifier or a regressor in sklearn format."
             )
 
-        bag.fit(self.data.x_train, self.data.y_train)
+        bag.fit(data.x, data.y)
         for est, samples in zip(bag.estimators_, bag.estimators_samples_):
-            oob_idx = np.setxor1d(self.data.indices, np.unique(samples))
+            oob_idx = np.setxor1d(data.indices, np.unique(samples))
             array_loss = self.loss(
-                y_true=self.data.y_train[oob_idx],
-                y_pred=est.predict(self.data.x_train[oob_idx]),
+                y_true=data.y[oob_idx],
+                y_pred=est.predict(data.x[oob_idx]),
             )
             self.result += ValuationResult(
                 algorithm=algorithm_name,
                 indices=oob_idx,
                 values=array_loss,
-                counts=np.ones_like(array_loss, dtype=u.data.indices.dtype),
+                counts=np.ones_like(array_loss, dtype=data.indices.dtype),
             )
 
 

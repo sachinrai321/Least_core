@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Callable, Generator, Iterable, Protocol, Sequence, Union
+from dataclasses import dataclass
+from typing import Callable, Generator, Iterable, Protocol, Sequence, TypeVar, Union
 
 import numpy as np
 from numpy.typing import NDArray
@@ -31,7 +31,6 @@ class ValueUpdate:
     update: float
 
 
-# Wow, this escalated quickly...
 @dataclass(frozen=True)
 class Sample:
     idx: IndexT | None
@@ -63,3 +62,4 @@ class LossFunction(Protocol):
 
 
 NullaryPredicate = Callable[[], bool]
+SampleT = TypeVar("SampleT", bound=Sample)
