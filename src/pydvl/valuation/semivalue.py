@@ -85,8 +85,8 @@ class SemivalueValuation(Valuation):
 
     def fit(self, data: Dataset):
         self.result = ValuationResult.zeros(
-            # TODO: automate str representation for all Valuations
-            algorithm=f"{self.__class__.__name__}-{self.sampler.__class__.__name__}-{self.utility.model}-{self.is_done}",
+            # TODO: automate str representation for all Valuations (and find something better)
+            algorithm=f"{self.__class__.__name__}-{self.utility.__class__.__name__}-{self.sampler.__class__.__name__}-{self.utility.model}-{self.is_done}",
             indices=data.indices,
             data_names=data.data_names,
         )
@@ -98,15 +98,18 @@ class SemivalueValuation(Valuation):
         parallel = Parallel(return_as="generator_unordered")
         strategy = self.sampler.make_strategy(self.utility, self.coefficient)
         processor = delayed(strategy.process)
+
         delayed_evals = parallel(
-            processor(batch=list(batch), is_interrupted=flag) for batch in self.sampler
+            processor(batch=list(batch), is_interrupted=flag)
+            for batch in self.sampler.from_data(data)
         )
         for batch in tqdm(iterable=delayed_evals, disable=not self.progress):
             for evaluation in batch:
                 self.result.update(evaluation.idx, evaluation.update)
-            if self.is_done(self.result):
-                flag.set()
-                break
+                if self.is_done(self.result):
+                    flag.set()
+                    self.sampler.interrupt()
+                    break
 
         # FIXME: remove NaN checking after fit()?
         import logging

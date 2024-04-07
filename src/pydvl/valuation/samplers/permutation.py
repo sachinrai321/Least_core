@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import logging
 import math
-import warnings
 from copy import copy
 from itertools import permutations
 from typing import Callable
@@ -65,45 +64,40 @@ class PermutationSampler(StochasticSamplerMixin, IndexSampler):
         of the index set, i.e. the batch size is always the number of indices.
 
     Args:
-        indices: The set of items (indices) to sample from.
         truncation: A policy to stop the permutation early.
         seed: Seed for the random number generator.
     """
 
     def __init__(
-        self,
-        indices: IndexSetT,
-        truncation: TruncationPolicy | None = None,
-        seed: Seed | None = None,
+        self, truncation: TruncationPolicy | None = None, seed: Seed | None = None
     ):
-        super().__init__(indices=indices, seed=seed)
+        super().__init__(seed=seed)
         self.truncation = truncation or NoTruncation()
-        self.batch_size = len(indices)
 
-    def generate(self) -> SampleGenerator:
+    @property
+    def batch_size(self) -> int:
+        return self._batch_size
+
+    @batch_size.setter
+    def batch_size(self, value: int):
+        raise AttributeError("Cannot change batch size for PermutationSampler")
+
+    def _generate(self, indices: IndexSetT) -> SampleGenerator:
         """Generates the permutation samples.
 
         Samples are yielded one by one, not as whole permutations. These are batched
         together by calling iter() on the sampler.
+
+        Args:
+            indices:
         """
         while True:
-            permutation = self._rng.permutation(self._indices)
+            permutation = self._rng.permutation(indices)
             for i, idx in enumerate(permutation):
-                yield Sample(idx, frozenset(permutation[: i + 1]))
+                yield Sample(idx, permutation[: i + 1])
                 self._n_samples += 1
             if self._n_samples == 0:  # Empty index set
                 break
-
-    def __getitem__(self, key: slice | list[int]) -> IndexSampler:
-        """Permutation samplers cannot be split across indices, so we return
-        a copy of the full sampler."""
-
-        warnings.warn(
-            "Permutation samplers cannot be split across indices, "
-            "returning a copy of the full sampler.",
-            RuntimeWarning,
-        )
-        return self.__class__(self._indices, seed=self._rng)
 
     @staticmethod
     def weight(n: int, subset_len: int) -> float:
@@ -128,12 +122,12 @@ class AntitheticPermutationSampler(PermutationSampler):
     !!! tip "New in version 0.7.1"
     """
 
-    def generate(self) -> SampleGenerator:
+    def _generate(self, indices: IndexSetT) -> SampleGenerator:
         while True:
-            permutation = self._rng.permutation(self._indices)
+            permutation = self._rng.permutation(indices)
             for perm in permutation, permutation[::-1]:
                 for i, idx in enumerate(perm):
-                    yield Sample(idx, frozenset(perm[: i + 1]))
+                    yield Sample(idx, perm[: i + 1])
                     self._n_samples += 1
             if self._n_samples == 0:  # Empty index set
                 break
@@ -143,21 +137,12 @@ class DeterministicPermutationSampler(PermutationSampler):
     """Samples all n! permutations of the indices deterministically, and
     iterates through them, returning sets as required for the permutation-based
     definition of semi-values.
-
-    !!! Warning
-        This sampler requires caching to be enabled or computation
-        will be doubled wrt. a "direct" implementation of permutation MC
-
-    !!! Warning
-        This sampler is not parallelizable, as it always iterates over the whole
-        set of permutations in the same order. Different processes would always
-        return the same values for all indices.
     """
 
-    def generate(self) -> SampleGenerator:
-        for permutation in permutations(self._indices):
+    def _generate(self, indices: IndexSetT) -> SampleGenerator:
+        for permutation in permutations(indices):
             for i, idx in enumerate(permutation):
-                yield Sample(idx, frozenset(permutation[: i + 1]))
+                yield Sample(idx, permutation[: i + 1])
                 self._n_samples += 1
 
 
@@ -181,7 +166,7 @@ class PermutationEvaluationStrategy(EvaluationStrategy[PermutationSampler]):
     def process(
         self, batch: SampleBatch, is_interrupted: NullaryPredicate
     ) -> list[ValueUpdate]:
-        self.truncation.reset(self.utility)  # Reset before every batch (will be cached)
+        self.truncation.reset(self.utility)  # Reset before every batch (must be cached)
         r = []
         truncated = False
         curr = prev = self.utility.default_score

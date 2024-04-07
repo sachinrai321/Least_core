@@ -16,8 +16,11 @@ from pydvl.valuation.base import (
 from pydvl.valuation.dataset import Dataset
 from pydvl.valuation.result import ValuationResult
 from pydvl.valuation.samplers import IndexSampler, PowersetSampler
+from pydvl.valuation.samplers.base import EvaluationStrategy
+from pydvl.valuation.samplers.powerset import NoIndexIteration
 from pydvl.valuation.scorers.classwise import ClasswiseScorer
 from pydvl.valuation.stopping import StoppingCriterion
+from pydvl.valuation.types import BatchGenerator, IndexSetT
 from pydvl.valuation.utility.base import UtilityBase
 from pydvl.valuation.utility.classwise import CSSample
 
@@ -34,52 +37,76 @@ def unique_labels(array: NDArray) -> NDArray:
     raise ValueError("Dataset must be categorical to have unique labels.")
 
 
+class ClasswiseSampler(IndexSampler):
+    def __init__(
+        self,
+        in_class: IndexSampler,
+        out_of_class: PowersetSampler,
+        label: int | None = None,
+    ):
+        super().__init__()
+        self.in_class = in_class
+        self.out_of_class = out_of_class
+        self.label = label
+
+    def for_label(self, label: int) -> ClasswiseSampler:
+        return ClasswiseSampler(self.in_class, self.out_of_class, label)
+
+    def from_data(self, data: Dataset) -> Generator[list[CSSample], None, None]:
+        assert self.label is not None
+
+        without_label = np.where(data.y != self.label)[0]
+        with_label = np.where(data.y == self.label)[0]
+
+        # HACK: the outer sampler is over full subsets of T_{-y_i}
+        self.out_of_class._index_iteration = NoIndexIteration
+
+        for ooc_batch in self.out_of_class.from_indices(without_label):
+            # NOTE: The inner sampler can be a permutation sampler => we need to
+            #  return batches of the same size as that sampler in order for the
+            #  in_class strategy to work correctly.
+            for ooc_sample in ooc_batch:
+                for ic_batch in self.in_class.from_indices(with_label):
+                    # FIXME? this sends the same out_of_class_subset for all samples
+                    #   maybe a few 10s of KB... probably irrelevant
+                    yield [
+                        CSSample(
+                            idx=ic_sample.idx,
+                            label=self.label,
+                            subset=ooc_sample.subset,
+                            in_class_subset=ic_sample.subset,
+                        )
+                        for ic_sample in ic_batch
+                    ]
+
+    def from_indices(self, indices: IndexSetT) -> BatchGenerator:
+        raise AttributeError("Cannot sample from indices directly.")
+
+    def make_strategy(
+        self,
+        utility: UtilityBase,
+        coefficient: Callable[[int, int], float] | None = None,
+    ) -> EvaluationStrategy[IndexSampler]:
+        return self.in_class.make_strategy(utility, coefficient)
+
+
 class ClasswiseShapley(Valuation):
     def __init__(
         self,
         utility: UtilityBase,
-        # TODO: create the factories
-        in_class_sampler_factory: Callable[..., IndexSampler],
-        out_of_class_sampler_factory: Callable[..., PowersetSampler],
+        sampler: ClasswiseSampler,
         is_done: StoppingCriterion,
         progress: bool = False,
     ):
         super().__init__()
         self.utility = utility
+        self.sampler = sampler
         self.labels: NDArray | None = None
         if not isinstance(utility.scorer, ClasswiseScorer):
             raise ValueError("Scorer must be a ClasswiseScorer.")
         self.scorer: ClasswiseScorer = utility.scorer
-        self.in_class_sampler_factory = in_class_sampler_factory
-        self.out_of_class_sampler_factory = out_of_class_sampler_factory
-        self.inner_sampler: IndexSampler | None = None
-        self.outer_sampler: PowersetSampler | None = None
         self.is_done = is_done
         self.progress = progress
-
-    def indices_without_label(self, data: Dataset, label: int):
-        return np.where(data.y != label)[0]
-
-    def indices_with_label(self, data: Dataset, label: int):
-        return np.where(data.y == label)[0]
-
-    def sampler(self, data: Dataset, label: int) -> Generator[CSSample, None, None]:
-        self.outer_sampler = self.out_of_class_sampler_factory(
-            self.indices_without_label(data, label)
-        )
-        self.inner_sampler = self.in_class_sampler_factory(
-            self.indices_with_label(data, label)
-        )
-        for out_of_class_sample in self.outer_sampler.generate():
-            for in_class_sample in self.inner_sampler.generate():
-                # FIXME? this sends the same out_of_class_subset for all samples
-                #   maybe a few 10s of KB... probably irrelevant
-                yield CSSample(
-                    idx=in_class_sample.idx,
-                    label=label,
-                    subset=out_of_class_sample.subset,
-                    in_class_subset=in_class_sample.subset,
-                )
 
     def fit(self, data: Dataset):
         self.result = ValuationResult.zeros(
@@ -95,12 +122,14 @@ class ClasswiseShapley(Valuation):
         self.utility.training_data = data
         self.labels = unique_labels(np.concatenate((data.y, self.utility.test_data.y)))
 
+        # FIXME, DUH: this loop needs to be in the sampler or we will never converge
         for label in self.labels:
-            sampler = self.sampler(data, label)
-            strategy = self.inner_sampler.make_strategy(self.utility)
+            sampler = self.sampler.for_label(label)
+            strategy = sampler.make_strategy(self.utility)
             processor = delayed(strategy.process)
             delayed_evals = parallel(
-                processor(batch=list(batch), is_interrupted=flag) for batch in sampler
+                processor(batch=list(batch), is_interrupted=flag)
+                for batch in sampler.from_data(data)
             )
             for evaluation in tqdm(iterable=delayed_evals, disable=not self.progress):
                 self.result.update(evaluation.idx, evaluation.update)

@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Generic
 
 import numpy as np
-from numpy._typing import NDArray
+from numpy.typing import NDArray
 
 from pydvl.utils import SupervisedModel
 from pydvl.valuation.dataset import Dataset

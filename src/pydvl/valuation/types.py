@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Callable, Generator, Iterable, Protocol, Sequence, TypeVar, Union
 
@@ -16,34 +17,43 @@ __all__ = [
     "Sample",
     "SampleBatch",
     "SampleGenerator",
+    "SampleT",
     "UtilityEvaluation",
     "ValueUpdate",
 ]
 
 IndexT = np.int_
-IndexSetT = Union[Sequence[IndexT], NDArray[IndexT]]
+IndexSetT = NDArray[IndexT]
 NameT = Union[np.object_, np.int_]
 
 
 @dataclass(frozen=True)
 class ValueUpdate:
-    idx: int
+    idx: IndexT
     update: float
 
 
 @dataclass(frozen=True)
 class Sample:
     idx: IndexT | None
-    subset: frozenset[IndexT]
+    subset: NDArray[IndexT]
 
     # Make the unpacking operator work
     def __iter__(self):  # No way to type the return Iterator properly
         return iter((self.idx, self.subset))
 
+    # hashlib.sha256 is about 4-5x faster than hash(), and returns the same value
+    # in all processes, as opposed to hash() which is salted in each process
+    def __hash__(self):
+        sha256_hash = hashlib.sha256(self.subset.tobytes()).hexdigest()
+        return int(sha256_hash, base=16)
+
+
+SampleT = TypeVar("SampleT", bound=Sample)
 
 SampleBatch = Iterable[Sample]
 SampleGenerator = Generator[Sample, None, None]
-BatchGenerator = Generator[SampleBatch, None, None]
+BatchGenerator = Generator[SampleBatch, bool, None]
 
 
 @dataclass(frozen=True)
@@ -62,4 +72,3 @@ class LossFunction(Protocol):
 
 
 NullaryPredicate = Callable[[], bool]
-SampleT = TypeVar("SampleT", bound=Sample)

@@ -36,7 +36,7 @@ class LOOValuation(SemivalueValuation):
         self.result: ValuationResult | None = None
         super().__init__(
             utility,
-            LOOSampler(utility.test_data.indices),
+            LOOSampler(),
             # LOO is done when every index has been updated once
             MinUpdates(n_updates=1),
             progress=progress,

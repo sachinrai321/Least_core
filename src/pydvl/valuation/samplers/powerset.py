@@ -3,10 +3,6 @@ Powerset samplers.
 
 TODO: explain the formulation and the different samplers.
 
-## Inner and outer indices
-
-...
-
 ## Stochastic samplers
 
 ...
@@ -37,8 +33,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from enum import Enum
-from typing import Callable, Generator, Iterable
+from typing import Callable, Generator, Type
 
 import numpy as np
 from numpy.typing import NDArray
@@ -63,7 +58,6 @@ __all__ = [
     "DeterministicUniformSampler",
     "LOOSampler",
     "IndexSampler",
-    "PowersetIndexIteration",
     "PowersetSampler",
     "TruncatedUniformStratifiedSampler",
     "UniformSampler",
@@ -74,9 +68,34 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
-class PowersetIndexIteration(Enum):
-    Sequential = "sequential"
-    Random = "random"
+class IndexIteration(ABC):
+    def __init__(self, indices: NDArray[IndexT]):
+        self._indices = indices
+
+    @abstractmethod
+    def __iter__(self) -> Generator[IndexT | None, None, None]:
+        ...
+
+
+class SequentialIndexIteration(IndexIteration):
+    def __iter__(self) -> Generator[IndexT, None, None]:
+        yield from self._indices
+
+
+class RandomIndexIteration(IndexIteration):
+    def __init__(self, indices: NDArray[IndexT], seed: Seed):
+        super().__init__(indices)
+        self._rng = np.random.default_rng(seed)
+
+    def __iter__(self) -> Generator[IndexT, None, None]:
+        while True:
+            yield self._rng.choice(self._indices, size=1).item()
+
+
+class NoIndexIteration(IndexIteration):
+    def __iter__(self) -> Generator[None, None, None]:
+        while True:
+            yield None
 
 
 class PowersetSampler(IndexSampler, ABC):
@@ -88,80 +107,46 @@ class PowersetSampler(IndexSampler, ABC):
     of indices, and the inner loop iterates over subsets of the complement of
     the current index. The outer iteration can be either sequential or at random.
 
-    ## Slicing of powerset samplers
-
-    Powerset samplers can be sliced for parallel computation. For those which are
-    embarrassingly parallel, this is done by slicing the set of "outer" indices and
-    returning new samplers over those slices. This includes all truly powerset-based
-    samplers, such as
-    [DeterministicUniformSampler][pydvl.valuation.samplers.DeterministicUniformSampler]
-    and [UniformSampler][pydvl.valuation.samplers.UniformSampler]. In contrast, slicing
-    a [PermutationSampler][pydvl.valuation.samplers.PermutationSampler] creates a new
-    sampler which iterates over the same indices.
     """
 
     def __init__(
         self,
-        indices: IndexSetT,
         batch_size: int = 1,
-        index_iteration: PowersetIndexIteration = PowersetIndexIteration.Sequential,
-        outer_indices: IndexSetT | None = None,
+        index_iteration: Type[IndexIteration] = SequentialIndexIteration,
     ):
         """
         Args:
-            indices: The set of items (indices) to sample from.
             batch_size: The number of samples to generate per batch. Batches are
                 processed together by
                 [UtilityEvaluator][pydvl.valuation.utility.evaluator.UtilityEvaluator].
             index_iteration: the order in which indices are iterated over
-            outer_indices: The set of items (indices) over which to iterate
-                when sampling. Subsets are taken from the complement of each index
-                in succession. For embarrassingly parallel computations, this set
-                is sliced into new samplers.
         """
-        super().__init__(indices, batch_size)
+        super().__init__(batch_size)
         self._index_iteration = index_iteration
-        self._outer_indices = np.array(
-            outer_indices if outer_indices is not None else self._indices,
-            copy=False,
-            dtype=self._indices.dtype,
-        )
 
-    def complement(self, exclude: IndexSetT) -> NDArray[IndexT]:
-        return np.setxor1d(self._indices, exclude)  # type: ignore
+    def complement(self, include: IndexSetT, exclude: IndexSetT) -> NDArray[IndexT]:
+        """Returns the complement of the set of indices excluding the given
+        indices.
 
-    def index_iterator(self) -> Generator[IndexT, None, None]:
-        """Iterates over indices in the order specified at construction.
+        Args:
+            exclude: The indices to exclude from the complement.
 
-        FIXME: this is probably not very useful, but I couldn't decide
-          which method of iteration is better
+        Returns:
+            The complement of the set of indices excluding the given indices.
         """
-        if self._index_iteration is PowersetIndexIteration.Sequential:
-            for idx in self._outer_indices:
-                yield idx
-        elif self._index_iteration is PowersetIndexIteration.Random:
-            while True:
-                yield np.random.choice(self._outer_indices, size=1).item()
+        exclude = [i for i in exclude if i is not None]
+        return np.setxor1d(include, exclude).astype(np.int_)
+
+    def index_iterator(self, indices: IndexSetT) -> Generator[IndexT, None, None]:
+        """Iterates over indices with the method specified at construction."""
+        yield from self._index_iteration(indices)
 
     @abstractmethod
-    def subset_iterator(self, idx: IndexT) -> Generator[IndexSetT, None, None]:
+    def subset_iterator(
+        self, indices: IndexSetT, idx: IndexT
+    ) -> Generator[IndexSetT, None, None]:
         """Iterates over subsets given an index (e.g. subsets of its complement)."""
-
-    def __len__(self) -> int:
-        """Returns the number of outer indices over which the sampler iterates."""
-        return len(self._outer_indices)
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self._indices}, {self._outer_indices})"
-
-    def __getitem__(self, key: slice | list[int]) -> PowersetSampler:
-        if isinstance(key, slice) or isinstance(key, Iterable):
-            return self.__class__(
-                self._indices,
-                index_iteration=self._index_iteration,
-                outer_indices=self._outer_indices[key],
-            )
-        raise TypeError("Indices must be an iterable or a slice")
+        ...
 
     def make_strategy(
         self,
@@ -170,16 +155,19 @@ class PowersetSampler(IndexSampler, ABC):
     ) -> PowersetEvaluationStrategy:
         return PowersetEvaluationStrategy(self, utility, coefficient)
 
-    def generate(self) -> SampleGenerator:
+    def _generate(self, indices: IndexSetT) -> SampleGenerator:
         """Generates samples iterating in sequence over the outer indices, then over
         subsets of the complement of the current index. Each PowersetSampler defines
         its own
         [subset_iterator][pydvl.valuation.samplers.PowersetSampler.subset_iterator] to
-        generate the subsets."""
+        generate the subsets.
+
+        Args:
+            indices:"""
         while True:
-            for idx in self.index_iterator():
-                for subset in self.subset_iterator(idx):
-                    yield Sample(idx, frozenset(subset))
+            for idx in self.index_iterator(indices):
+                for subset in self.subset_iterator(indices, idx):
+                    yield Sample(idx, subset)
                     self._n_samples += 1
 
     @staticmethod
@@ -197,7 +185,7 @@ class PowersetEvaluationStrategy(EvaluationStrategy[PowersetSampler]):
         r = []
         for sample in batch:
             u_i = self.utility(
-                Sample(sample.idx, frozenset({sample.idx}.union(sample.subset)))
+                Sample(sample.idx, np.array(list({sample.idx}.union(sample.subset))))
             )
             u = self.utility(sample)
             marginal = (u_i - u) * self.coefficient(self.n_indices, len(sample.subset))
@@ -207,17 +195,18 @@ class PowersetEvaluationStrategy(EvaluationStrategy[PowersetSampler]):
         return r
 
 
-class LOOSampler(PowersetSampler):
+class LOOSampler(IndexSampler):
     """Leave-One-Out sampler.
+    For every index $i$ in the set $S$, the sample $(i, S_{-i})$ is returned.
 
-    As first item, it returns the full set of indices. Then, for each index in the set,
-    it returns a tuple with an index and the complement set.
-
-    !!! tip "New in version 0.9.0"
+    !!! tip "New in version 0.10.0"
     """
 
-    def subset_iterator(self, idx: IndexT) -> Generator[IndexSetT, None, None]:
-        yield self.complement([idx])
+    def _generate(self, indices: IndexSetT) -> SampleGenerator:
+        for idx in indices:
+            complement = np.setxor1d(indices, [idx]).astype(np.int_)
+            yield Sample(idx, complement)
+            self._n_samples += 1
 
     @staticmethod
     def weight(n: int, subset_len: int) -> float:
@@ -241,7 +230,7 @@ class LOOEvaluationStrategy(EvaluationStrategy[LOOSampler]):
         coefficient: Callable[[int, int], float] | None = None,
     ):
         super().__init__(sampler, utility, coefficient)
-        self.total_utility = utility(Sample(None, frozenset(sampler.indices)))
+        self.total_utility = utility(Sample(None, utility.training_data.indices))
 
     def process(
         self, batch: SampleBatch, is_interrupted: NullaryPredicate
@@ -269,25 +258,20 @@ class DeterministicUniformSampler(PowersetSampler):
 
     ??? Example
         ``` pycon
-        >>> for idx, s in DeterministicUniformSampler(np.arange(2)):
+        >>> sampler = DeterministicUniformSampler()
+        >>> for idx, s in sampler.from_indices([1,2]):
         >>>    print(f"{idx} - {s}", end=", ")
         1 - [], 1 - [2], 2 - [], 2 - [1],
         ```
-
-    Args:
-        indices: The set of items (indices) to sample from.
-        outer_indices: The set of items ("outer indices") over which to iterate
     """
 
-    def __init__(self, indices: IndexSetT, outer_indices: IndexSetT | None = None):
-        super().__init__(
-            indices,
-            index_iteration=PowersetIndexIteration.Sequential,
-            outer_indices=outer_indices,
-        )
+    def __init__(self):
+        super().__init__(index_iteration=SequentialIndexIteration)
 
-    def subset_iterator(self, idx: IndexT) -> Generator[IndexSetT, None, None]:
-        for subset in powerset(self.complement([idx])):
+    def subset_iterator(
+        self, indices: IndexSetT, idx: IndexT
+    ) -> Generator[IndexSetT, None, None]:
+        for subset in powerset(self.complement(indices, [idx])):
             yield subset
 
 
@@ -312,8 +296,10 @@ class UniformSampler(StochasticSamplerMixin, PowersetSampler):
         ```
     """
 
-    def subset_iterator(self, idx: IndexT) -> Generator[IndexSetT, None, None]:
-        yield random_subset(self.complement([idx]), seed=self._rng)
+    def subset_iterator(
+        self, indices: IndexSetT, idx: IndexT
+    ) -> Generator[IndexSetT, None, None]:
+        yield random_subset(self.complement(indices, [idx]), seed=self._rng)
 
 
 class AntitheticSampler(StochasticSamplerMixin, PowersetSampler):
@@ -325,8 +311,10 @@ class AntitheticSampler(StochasticSamplerMixin, PowersetSampler):
     complement of the set $S$ in the set of indices, excluding $i$.
     """
 
-    def subset_iterator(self, idx: IndexT) -> Generator[IndexSetT, None, None]:
-        _complement = self.complement([idx])
+    def subset_iterator(
+        self, indices: IndexSetT, idx: IndexT
+    ) -> Generator[IndexSetT, None, None]:
+        _complement = self.complement(indices, [idx])
         subset = random_subset(_complement, seed=self._rng)
         yield subset
         yield np.setxor1d(_complement, subset)
@@ -337,9 +325,13 @@ class AntitheticSampler(StochasticSamplerMixin, PowersetSampler):
 class UniformStratifiedSampler(StochasticSamplerMixin, PowersetSampler):
     """For every index, sample a set size, then a set of that size."""
 
-    def subset_iterator(self, idx: IndexT) -> Generator[IndexSetT, None, None]:
-        k = int(self._rng.choice(np.arange(len(self.indices)), size=1).item())
-        yield random_subset_of_size(self.complement([idx]), size=k, seed=self._rng)
+    def subset_iterator(
+        self, indices: IndexSetT, idx: IndexT
+    ) -> Generator[IndexSetT, None, None]:
+        k = int(self._rng.choice(np.arange(len(indices)), size=1).item())
+        yield random_subset_of_size(
+            self.complement(indices, [idx]), size=k, seed=self._rng
+        )
 
     # FIXME: is a uniform 2^{1-n} weight correct here too?
 
@@ -350,33 +342,30 @@ class TruncatedUniformStratifiedSampler(UniformStratifiedSampler):
     This sampler was suggested in (Watson et al. 2023)<sup><a
     href="#watson_accelerated_2023">1</a></sup> for $\delta$-Shapley
 
-    !!! tip "New in version 0.9.0"
+    !!! tip "New in version 0.10.0"
     """
 
     def __init__(
         self,
-        indices: IndexSetT,
         *,
         lower_bound: int,
         upper_bound: int,
-        index_iteration: PowersetIndexIteration = PowersetIndexIteration.Sequential,
-        outer_indices: IndexSetT | None = None,
+        index_iteration: Type[IndexIteration] = SequentialIndexIteration,
         seed: Seed | None = None,
     ):
-        super().__init__(
-            indices,
-            index_iteration=index_iteration,
-            outer_indices=outer_indices,
-            seed=seed,
-        )
+        super().__init__(index_iteration=index_iteration, seed=seed)
         self.lower_bound = lower_bound
         self.upper_bound = upper_bound
 
-    def subset_iterator(self, idx: IndexT) -> Generator[IndexSetT, None, None]:
+    def subset_iterator(
+        self, indices: IndexSetT, idx: IndexT
+    ) -> Generator[IndexSetT, None, None]:
         k = self._rng.integers(
             low=self.lower_bound, high=self.upper_bound + 1, size=1
         ).item()
-        yield random_subset_of_size(self.complement([idx]), size=k, seed=self._rng)
+        yield random_subset_of_size(
+            self.complement(indices, [idx]), size=k, seed=self._rng
+        )
 
     # FIXME: is a uniform 2^{1-n} weight correct here too?
 
@@ -389,39 +378,31 @@ class VarianceReducedStratifiedSampler(StochasticSamplerMixin, PowersetSampler):
     sampler in (Maleki et al. 2014)<sup><a href="#maleki_bounding_2014">4</a></sup>
 
     Args:
-        indices: The set of items (indices) to sample from.
         samples_per_setsize: A function which returns the number of samples to
             take for a given set size.
-        max_samples: The maximum number of samples to take.
         index_iteration: the order in which indices are iterated over
-        outer_indices: The set of items (indices) over which to iterate
-            when sampling. Subsets are taken from the complement of each index
-            in succession.
 
-    !!! tip "New in version 0.9.0"
+    !!! tip "New in version 0.10.0"
     """
 
     def __init__(
         self,
-        indices: IndexSetT,
-        *,
         samples_per_setsize: Callable[[int], int],
-        index_iteration: PowersetIndexIteration = PowersetIndexIteration.Sequential,
-        outer_indices: IndexSetT | None = None,
+        index_iteration: Type[IndexIteration] = SequentialIndexIteration,
     ):
-        super().__init__(
-            indices, index_iteration=index_iteration, outer_indices=outer_indices
-        )
+        super().__init__(index_iteration=index_iteration)
         self.samples_per_setsize = samples_per_setsize
         # HACK: closure around the argument to avoid weight() being an instance method
         # FIXME: is this the correct weight anyway?
         self.weight = lambda n, subset_len: samples_per_setsize(subset_len)
 
-    def subset_iterator(self, idx: IndexT) -> Generator[IndexSetT, None, None]:
-        for k in range(1, len(self.complement([idx]))):
+    def subset_iterator(
+        self, indices: IndexSetT, idx: IndexT
+    ) -> Generator[IndexSetT, None, None]:
+        for k in range(1, len(self.complement(indices, [idx]))):
             for _ in range(self.samples_per_setsize(k)):
                 yield random_subset_of_size(
-                    self.complement([idx]), size=k, seed=self._rng
+                    self.complement(indices, [idx]), size=k, seed=self._rng
                 )
 
     @staticmethod

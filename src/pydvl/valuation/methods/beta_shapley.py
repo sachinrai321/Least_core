@@ -21,8 +21,9 @@ class BetaShapleyValuation(SemivalueValuation):
         is_done: StoppingCriterion,
         alpha: float,
         beta: float,
+        progress: bool = False,
     ):
-        super().__init__(utility, sampler, is_done)
+        super().__init__(utility, sampler, is_done, progress=progress)
 
         self.alpha = alpha
         self.beta = beta

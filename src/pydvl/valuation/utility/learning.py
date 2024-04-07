@@ -50,8 +50,8 @@ class DataUtilityLearning(UtilityBase[SampleT]):
         >>> wrapped_u = DataUtilityLearning(u, 3, LinearRegression())
         ... # First 3 calls will be computed normally
         >>> for i in range(3):
-        ...     _ = wrapped_u(Sample(0, frozenset((i,))))
-        >>> wrapped_u(Sample(0, frozenset(1, 2, 3))) # Subsequent calls will be computed using the fit model for DUL
+        ...     _ = wrapped_u(Sample(0, np.array([])))
+        >>> wrapped_u(Sample(0, np.array([1, 2, 3]))) # Subsequent calls will be computed using the fit model for DUL
         0.0
         ```
 
@@ -70,7 +70,7 @@ class DataUtilityLearning(UtilityBase[SampleT]):
     def _convert_indices_to_boolean_vector(
         self, x: Iterable[IndexT]
     ) -> NDArray[np.bool_]:
-        assert self.training_data is not None
+        assert self.utility.training_data is not None
         boolean_vector: NDArray[np.bool_] = np.zeros(
             (1, len(self.utility.training_data)), dtype=np.bool_
         )
@@ -103,7 +103,18 @@ class DataUtilityLearning(UtilityBase[SampleT]):
     def __getattr__(self, item):
         return getattr(self.utility, item)
 
-    # @property
-    # def data(self) -> Dataset:
-    #     """Returns the wrapped utility's [Dataset][pydvl.utils.dataset.Dataset]."""
-    #     return self.utility.data
+    def __setattr__(self, key, value):
+        if key != "utility":
+            setattr(self.utility, key, value)
+        else:
+            super().__setattr__(key, value)
+
+    # Avoid infinite recursion in __getattr__ when pickling:
+    #  my theory: pickle attempts to access .utility before it has been set, which
+    #  triggers __getattr__ and the recursion
+    # FIXME: test that we are really pickling correctly
+    def __getstate__(self):
+        return vars(self)
+
+    def __setstate__(self, state):
+        vars(self).update(state)

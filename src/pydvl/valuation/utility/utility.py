@@ -200,7 +200,7 @@ class Utility(UtilityBase[SampleT]):
         if self.training_data is None:
             raise ValueError("No training data provided")
 
-        x_train, y_train = self.training_data.get_data(list(sample.subset))
+        x_train, y_train = self.training_data.get_data(sample.subset)
         x_test, y_test = self.test_data.get_data()
 
         with warnings.catch_warnings():

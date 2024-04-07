@@ -97,7 +97,7 @@ class NoTruncation(TruncationPolicy):
     def _check(self, idx: int, score: float, batch_size: int) -> bool:
         return False
 
-    def reset(self, _: Utility):
+    def reset(self, _: UtilityBase):
         pass
 
 
@@ -127,7 +127,7 @@ class FixedTruncation(TruncationPolicy):
         self.count += 1
         return self.count >= self.fraction * batch_size
 
-    def reset(self, _: Utility):
+    def reset(self, _: UtilityBase):
         self.count = 0
 
 
@@ -165,9 +165,8 @@ class RelativeTruncation(TruncationPolicy):
         if self._is_setup:
             return
         logger.info("Computing total utility for RelativeTruncation.")
-        self.total_utility = utility(
-            Sample(None, frozenset(utility.training_data.indices))
-        )
+        assert utility.training_data is not None
+        self.total_utility = utility(Sample(None, utility.training_data.indices))
         self._is_setup = True
 
 
@@ -225,7 +224,6 @@ class DeviationTruncation(TruncationPolicy):
         if self._is_setup:
             return
         logger.info("Computing total utility for DeviationTruncation.")
-        self.total_utility = utility(
-            Sample(None, frozenset(utility.training_data.indices))
-        )
+        assert utility.training_data is not None
+        self.total_utility = utility(Sample(None, utility.training_data.indices))
         self._is_setup = True

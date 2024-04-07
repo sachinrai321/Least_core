@@ -7,11 +7,9 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Callable, Generic, Iterable, TypeVar, overload
+from typing import Callable, Generic, TypeVar
 
-import numpy as np
-from numpy.typing import NDArray
-
+from pydvl.valuation.dataset import Dataset
 from pydvl.valuation.samplers.utils import take_n
 from pydvl.valuation.types import (
     BatchGenerator,
@@ -32,25 +30,29 @@ __all__ = ["EvaluationStrategy", "IndexSampler"]
 logger = logging.getLogger(__name__)
 
 
-class IndexSampler(ABC, Iterable[SampleBatch]):
+class IndexSampler(ABC):
     r"""Samplers are custom iterables over batches of subsets of indices.
 
-    Calling ``iter()`` on a sampler returns a generator over **batches** of `Samples`.
-    A [Sample][pydvl.valuation.samplers.Sample] is a tuple of the form $(i, S)$, where $i$ is
-    an index of interest, and $S \subset I \setminus \{i\}$ is a subset of the
-    complement of $i$ in $I$.
+    Calling `from_indices(indexset)` on a sampler returns a generator over **batches**
+    of `Samples`. A [Sample][pydvl.valuation.samplers.Sample] is a tuple of the form
+    $(i, S)$, where $i$ is an index of interest, and $S \subset I \setminus \{i\}$ is a
+    subset of the complement of $i$ in $I$.
 
     !!! Note
-        Samplers are **not** iterators themselves, so that each call to ``iter()``
-        e.g. in a new for loop creates a new iterator.
+        Samplers are **not** iterators themselves, so that each call to
+        `from_indices(data)` e.g. in a new for loop creates a new iterator.
 
     Derived samplers must implement
     [weight()][pydvl.valuation.samplers.IndexSampler.weight] and
-    [generate()][pydvl.valuation.samplers.IndexSampler.generate]. See the module's
+    [_generate()][pydvl.valuation.samplers.IndexSampler._generate]. See the module's
     documentation for more on these.
 
+    ## Interrupting samplers
+
+    Calling [interrupt()][pydvl.valuation.samplers.IndexSampler.interrupt] on a sampler
+    will stop the batched generator after the current batch has been yielded.
+
     Args:
-        indices: The set of items (indices) to sample from.
         batch_size: The number of samples to generate per batch. Batches are
             processed by
             [EvaluationStrategy][pydvl.valuation.samplers.base.EvaluationStrategy]
@@ -60,28 +62,23 @@ class IndexSampler(ABC, Iterable[SampleBatch]):
     ??? Example
         ``` pycon
         >>>from pydvl.valuation.samplers import DeterministicUniformSampler
-        >>>for idx, s in DeterministicUniformSampler(np.arange(2)):
+        >>>sampler = DeterministicUniformSampler()
+        >>>for idx, s in sampler.from_indices([1, 2]):
         >>>    print(s, end="")
         [][2,][][1,]
         ```
     """
 
-    def __init__(self, indices: IndexSetT, batch_size: int = 1):
+    def __init__(self, batch_size: int = 1):
         """
         Args:
-            indices: The set of items (indices) to sample from.
+            batch_size: The number of samples to generate per batch. Batches are
+                processed by the
+                [EvaluationStrategy][pydvl.valuation.samplers.base.EvaluationStrategy]
         """
-        self._indices = np.array(indices, copy=False)
-        self._n_samples = 0
         self._batch_size = batch_size
-
-    @property
-    def indices(self) -> NDArray[IndexT]:
-        return self._indices
-
-    @indices.setter
-    def indices(self, indices: NDArray[IndexT]) -> None:
-        raise AttributeError("Cannot set indices of sampler")
+        self._n_samples = 0
+        self._interrupted = False
 
     @property
     def n_samples(self) -> int:
@@ -101,40 +98,38 @@ class IndexSampler(ABC, Iterable[SampleBatch]):
             raise ValueError("batch_size must be at least 1")
         self._batch_size = value
 
+    def interrupt(self):
+        self._interrupted = True
+
     def __str__(self) -> str:
         return self.__class__.__name__
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self._indices})"
+        return f"{self.__class__.__name__}"
 
-    @overload
-    def __getitem__(self, key: slice) -> IndexSampler:
-        ...
+    def from_data(self, data: Dataset) -> BatchGenerator:
+        return self.from_indices(data.indices)
 
-    @overload
-    def __getitem__(self, key: list[int]) -> IndexSampler:
-        ...
-
-    @abstractmethod
-    def __getitem__(self, key: slice | list[int]) -> IndexSampler:
-        ...
-
-    def __iter__(self) -> BatchGenerator:
+    def from_indices(self, indices: IndexSetT) -> BatchGenerator:
         """Batches the samples and yields them."""
-        yield from take_n(self.generate(), self.batch_size)
+        self._interrupted = False
+        for batch in take_n(self._generate(indices), self.batch_size):
+            yield batch
+            if self._interrupted:
+                break
 
     @abstractmethod
-    def generate(self) -> SampleGenerator:
+    def _generate(self, indices: IndexSetT) -> SampleGenerator:
         """Generates single samples.
 
-        `IndexSampler.__iter__()` will batch these samples according to the batch size
-        set upon construction.
+        `IndexSampler.from_indices()` will batch these samples according to the batch
+        size set upon construction.
+
+        Args:
+            indices:
 
         Yields:
             A tuple (idx, subset) for each sample.
-
-        Receives:
-            Feedback required by the sampler.
         """
         ...
 
@@ -227,7 +222,7 @@ class EvaluationStrategy(ABC, Generic[SamplerT]):
         coefficient: Callable[[int, int], float] | None = None,
     ):
         self.utility = utility
-        self.n_indices = len(sampler.indices)
+        self.n_indices = len(utility.training_data.indices)
         self.coefficient: Callable[[int, int], float] = lambda n, k: 1.0
 
         if sampler is not None:

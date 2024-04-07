@@ -31,14 +31,12 @@ class DeltaShapleyValuation(SemivalueValuation):
         lower_bound: int,
         upper_bound: int,
         seed: Seed | None = None,
+        progress: bool = False,
     ):
         sampler = TruncatedUniformStratifiedSampler(
-            utility.test_data.indices,
-            lower_bound=lower_bound,
-            upper_bound=upper_bound,
-            seed=seed,
+            lower_bound=lower_bound, upper_bound=upper_bound, seed=seed
         )
-        super().__init__(utility, sampler, is_done)
+        super().__init__(utility, sampler, is_done, progress=progress)
 
     def coefficient(self, n: int, k: int) -> float:
         return float(1 / math.comb(n, k))
