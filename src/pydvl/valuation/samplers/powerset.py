@@ -124,11 +124,13 @@ class PowersetSampler(IndexSampler, ABC):
         super().__init__(batch_size)
         self._index_iteration = index_iteration
 
-    def complement(self, include: IndexSetT, exclude: IndexSetT) -> NDArray[IndexT]:
+    @staticmethod
+    def complement(include: IndexSetT, exclude: IndexSetT) -> NDArray[IndexT]:
         """Returns the complement of the set of indices excluding the given
         indices.
 
         Args:
+            include: The set of indices to consider.
             exclude: The indices to exclude from the complement.
 
         Returns:

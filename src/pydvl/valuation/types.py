@@ -25,6 +25,7 @@ __all__ = [
 IndexT = np.int_
 IndexSetT = NDArray[IndexT]
 NameT = Union[np.object_, np.int_]
+NullaryPredicate = Callable[[], bool]
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,3 @@ class UtilityEvaluation:
 class LossFunction(Protocol):
     def __call__(self, y_true: NDArray, y_pred: NDArray) -> NDArray:
         ...
-
-
-NullaryPredicate = Callable[[], bool]

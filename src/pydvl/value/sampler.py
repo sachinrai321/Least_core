@@ -126,9 +126,9 @@ class PowersetSampler(abc.ABC, Iterable[SampleT], Generic[IndexT]):
 
     def __init__(
         self,
-        indices: IndexSetT[IndexT],
+        indices: IndexSetT,
         index_iteration: IndexIteration = IndexIteration.Sequential,
-        outer_indices: IndexSetT[IndexT] | None = None,
+        outer_indices: IndexSetT | None = None,
         **kwargs,
     ):
         """
@@ -142,7 +142,11 @@ class PowersetSampler(abc.ABC, Iterable[SampleT], Generic[IndexT]):
         """
         self._indices = np.array(indices, copy=False)
         self._index_iteration = index_iteration
-        self._outer_indices = outer_indices if outer_indices is not None else indices
+        self._outer_indices = (
+            np.array(outer_indices, copy=False)
+            if outer_indices is not None
+            else self._indices
+        )
         self._n = len(indices)
         self._n_samples = 0
 
@@ -162,7 +166,7 @@ class PowersetSampler(abc.ABC, Iterable[SampleT], Generic[IndexT]):
     def n_samples(self, n: int):
         raise AttributeError("Cannot reset a sampler's number of samples")
 
-    def complement(self, exclude: IndexSetT[IndexT]) -> NDArray[IndexT]:
+    def complement(self, exclude: IndexSetT) -> NDArray[IndexT]:
         return np.setxor1d(self._indices, exclude)  # type: ignore
 
     def iterindices(self) -> Iterator[IndexT]:
@@ -202,7 +206,7 @@ class PowersetSampler(abc.ABC, Iterable[SampleT], Generic[IndexT]):
     def __str__(self):
         return self.__class__.__name__
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self._indices}, {self._outer_indices})"
 
     @abc.abstractmethod
@@ -241,7 +245,7 @@ class LOOSampler(PowersetSampler[IndexT]):
     def __iter__(self) -> Iterator[SampleT]:
         yield {}, self.indices
         for idx in self.iterindices():
-            yield idx, self.indices - {idx}
+            yield idx, self.complement([idx])
 
     @classmethod
     def weight(cls, n: int, subset_len: int) -> float:
@@ -257,7 +261,7 @@ class StochasticSamplerMixin:
 
 
 class DeterministicUniformSampler(PowersetSampler[IndexT]):
-    def __init__(self, indices: IndexSetT[IndexT], *args, **kwargs):
+    def __init__(self, indices: IndexSetT, *args, **kwargs):
         """An iterator to perform uniform deterministic sampling of subsets.
 
         For every index $i$, each subset of the complement `indices - {i}` is
