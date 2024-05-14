@@ -15,7 +15,6 @@ from pydvl.valuation.samplers.utils import take_n
 from pydvl.valuation.types import (
     BatchGenerator,
     IndexSetT,
-    IndexT,
     NullaryPredicate,
     SampleBatch,
     SampleGenerator,
@@ -113,6 +112,12 @@ class IndexSampler(ABC):
 
     def from_indices(self, indices: IndexSetT) -> BatchGenerator:
         """Batches the samples and yields them."""
+
+        # early return for empty indices. Necessary because some samplers use a
+        # while True loop to generate infinite samples.
+        if len(indices) == 0:
+            return
+
         self._interrupted = False
         for batch in take_n(self._generate(indices), self.batch_size):
             yield batch
@@ -120,6 +125,18 @@ class IndexSampler(ABC):
             self._n_samples += self.batch_size
             if self._interrupted:
                 break
+
+    def length(self, indices: IndexSetT) -> int | None:
+        """Number of samples that can be generated from the indices.
+
+        Returns None if the number of samples is infinite, which is the case for most
+        stochastic samplers.
+        """
+        if len(indices) == 0:
+            out = 0
+        else:
+            out = None
+        return out
 
     @abstractmethod
     def _generate(self, indices: IndexSetT) -> SampleGenerator:
